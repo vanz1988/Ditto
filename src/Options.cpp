@@ -1477,14 +1477,7 @@ long CGetSetOptions::GetPort()
 
 BOOL CGetSetOptions::GetDisableRecieve()
 {
-	BOOL bDefault = FALSE;
-	if(GetIsPortableDitto())
-		bDefault = TRUE;
-
-	if(GetIsWindowsApp())
-		bDefault = TRUE;
-
-	return GetProfileLong("DisableRecieve", bDefault);
+	return GetProfileLong("DisableRecieve", FALSE);
 }
 
 void CGetSetOptions::SetDisableRecieve(BOOL bVal)
