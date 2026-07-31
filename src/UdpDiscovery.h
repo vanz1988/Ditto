@@ -44,7 +44,7 @@ private:
     void AddIPToFriends(const CString& csIP, const CString& csName);
     bool ParseHeartbeat(const char* buf, int len, CString& ip, CString& name);
     void SendHeartbeat();
-    CStringArray DiscoverLocalIPs();
+    void DiscoverLocalIPs();
     bool SetupWSA();
     bool SetupSocket();
 };

@@ -145,10 +145,11 @@ bool CUdpDiscoveryThread::SetupSocket()
 // ── ipmsg-style enumeration using GetAdaptersInfo ────────────────────────────
 // This matches the approach of the original IPMsg code which filters by
 // adapter type (not loopback, not tunnel) and IP class.
-CStringArray CUdpDiscoveryThread::DiscoverLocalIPs()
+void CUdpDiscoveryThread::DiscoverLocalIPs()
 {
-    CStringArray arrIPs;
-    CStringArray arrHostNames;
+    m_ownIPs.RemoveAll();
+    m_ownHostNames.RemoveAll();
+    m_broadcasts.RemoveAll();
     CString cs;
 
     DWORD dwBufLen = 15000;
@@ -156,7 +157,7 @@ CStringArray CUdpDiscoveryThread::DiscoverLocalIPs()
     if(pAdapterInfo == NULL)
     {
         Log(_T("UdpDiscovery: malloc failed"));
-        return arrIPs;
+        return;
     }
 
     ULONG dwRet = GetAdaptersInfo(pAdapterInfo, &dwBufLen);
@@ -165,20 +166,18 @@ CStringArray CUdpDiscoveryThread::DiscoverLocalIPs()
         free(pAdapterInfo);
         cs.Format(_T("UdpDiscovery: GetAdaptersInfo failed: %u"), dwRet);
         Log(cs);
-        return arrIPs;
+        return;
     }
 
     PIP_ADAPTER_INFO pAdapter = pAdapterInfo;
-    BOOL bFirstAdapter = TRUE;
 
     while(pAdapter != NULL)
     {
         CString csDesc = pAdapter->Description;
 
         // ipmsg-style filters:
-        // - IfType == IF_TYPE_SOFTWARE_LOOPBACK → skip
-        // - IfType == IF_TYPE_TUNNEL           → skip
-        // - IfType == IF_TYPE_ETHERNET_PPP    → allowed (VPN)
+        // - IfType == IF_TYPE_SOFTWARE_LOOPBACK -> skip
+        // - IfType == IF_TYPE_TUNNEL -> skip
         BOOL bSkip = FALSE;
         if(pAdapter->Type == IF_TYPE_SOFTWARE_LOOPBACK)
             bSkip = TRUE;
@@ -219,8 +218,7 @@ CStringArray CUdpDiscoveryThread::DiscoverLocalIPs()
                     continue;
                 }
 
-                // ipmsg: only pick "normal" Ethernet interfaces
-                // (skip Hyper-V virtual switches)
+                // Only pick Ethernet interfaces (skip Hyper-V virtual switches)
                 if(pAdapter->Type == IF_TYPE_IEEE802 ||
                    pAdapter->Type == IF_TYPE_ETHERNET_CSMACD)
                 {
@@ -231,7 +229,7 @@ CStringArray CUdpDiscoveryThread::DiscoverLocalIPs()
                         csIP, csMask, csBr);
                     Log(cs);
 
-                    arrIPs.Add(csIP);
+                    m_ownIPs.Add(csIP);
 
                     // DNS lookup for hostname
                     CStringA csIPA = CTextConvert::UnicodeToAnsi(csIP);
@@ -241,9 +239,9 @@ CStringArray CUdpDiscoveryThread::DiscoverLocalIPs()
                     if(pHost && pHost->h_name)
                         csNameA = CStringA(pHost->h_name);
                     if(csNameA.GetLength() > 0)
-                        arrHostNames.Add(csNameA);
+                        m_ownHostNames.Add(csNameA);
                     else
-                        arrHostNames.Add(_T(""));
+                        m_ownHostNames.Add(_T(""));
 
                     if(csBr.GetLength() > 0)
                         m_broadcasts.Add(csBr);
@@ -272,34 +270,25 @@ CStringArray CUdpDiscoveryThread::DiscoverLocalIPs()
     free(pAdapterInfo);
 
     cs.Format(_T("UdpDiscovery: total %d local IP(s), %d broadcast(s)"),
-        arrIPs.GetSize(), m_broadcasts.GetSize());
+        m_ownIPs.GetSize(), m_broadcasts.GetSize());
     Log(cs);
 
-    for(int i = 0; i < arrIPs.GetSize(); i++)
+    for(int i = 0; i < m_ownIPs.GetSize(); i++)
     {
-        CString csIP = arrIPs.GetAt(i);
-        CString csHN = (arrHostNames.GetSize() > i) ? arrHostNames.GetAt(i) : _T("");
+        CString csIP = m_ownIPs.GetAt(i);
+        CString csHN = (m_ownHostNames.GetSize() > i) ? m_ownHostNames.GetAt(i) : _T("");
         CString csBr = (m_broadcasts.GetSize() > i) ? m_broadcasts.GetAt(i) : _T("");
         cs.Format(_T("UdpDiscovery:   [%d] ip=%s host=%s br=%s"),
             i, csIP, csHN, csBr);
         Log(cs);
     }
 
-    m_ownIPs.RemoveAll();
-    m_ownHostNames.RemoveAll();
-    m_ownIPs.Copy(arrIPs);
-    m_ownHostNames.Copy(arrHostNames);
-
-    if(arrIPs.GetSize() > 0)
+    if(m_ownIPs.GetSize() > 0)
     {
-        m_selectedName = (arrHostNames.GetSize() > 0) ? arrHostNames.GetAt(0) : _T("");
+        m_selectedName = (m_ownHostNames.GetSize() > 0) ? m_ownHostNames.GetAt(0) : _T("");
         if(m_selectedName.GetLength() == 0)
             m_selectedName = m_computerName;
     }
-
-    return arrIPs;
-}
-
 bool CUdpDiscoveryThread::IsIPInFriends(const CString& csIP)
 {
     CString csTarget = csIP;
