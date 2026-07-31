@@ -31,16 +31,15 @@ private:
     CString m_userName;
 
     CStringArray m_ownIPs;         // All own IPs for self-filtering
-    CStringArray m_ownHostNames;   // Hostnames for each IP
+    CStringArray m_ownHostNames;   // Hostnames per IP
     CStringArray m_broadcasts;     // Subnet broadcast per interface
-    CString m_selectedIP;          // Primary IP for heartbeat payload
+    CString m_selectedIP;          // Primary IP for heartbeat
     CString m_selectedName;        // Primary hostname
     CString m_selectedDesc;        // Primary adapter description
 
-    ULONG IPv4ToUlong(const CString& csIP);
-    CString MakeBroadcastAddr(ULONG ip, ULONG maskBits);
     CString GetUsernameSafe();
     CString GetComputerNameSafe();
+    CString MakeBroadcastAddr(ULONG ip, const CString& csMask);
     bool IsIPInFriends(const CString& csIP);
     void AddIPToFriends(const CString& csIP, const CString& csName);
     bool ParseHeartbeat(const char* buf, int len, CString& ip, CString& name);

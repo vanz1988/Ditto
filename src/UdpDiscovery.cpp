@@ -5,29 +5,22 @@
 #include "..\Shared\TextConvert.h"
 #include <IPHlpApi.h>
 
-#include <ws2tcpip.h>
-
 #pragma comment(lib, "IPHlpApi.lib")
 
-
-// IPCt.h types not available under WIN32_LEAN_AND_MEAN (VC_EXTRALEAN in StdAfx.h).
-// Define IP_UNICAST_ADDRESS here to iterate GetAdaptersAddresses output.
-#ifndef IP_UNICAST_ADDRESS_FLAG_DNS_ELIGIBLE
-#define IP_UNICAST_ADDRESS_FLAG_DNS_ELIGIBLE       0x10
-#define IP_ADAPTER_ADDRESS_TRANSIENT              0x20
-typedef struct _IP_UNICAST_ADDRESS {
-    union {
-        ULONG  Alignment;
-        struct {
-            USHORT  AddressLength;
-            USHORT  InterfaceIndex;
-            ULONG   AddressFlags;
-        };
-    };
-    ADDRESS_FAMILY Address;
-    struct _IP_UNICAST_ADDRESS *Next;
-} IP_UNICAST_ADDRESS, *PIP_UNICAST_ADDRESS, *PIP_UNICAST_ADDRESS_LH;
+// IF_TYPE_IEEE802 is not exposed under WIN32_LEAN_AND_MEAN
+#ifndef IF_TYPE_IEEE802
+#define IF_TYPE_IEEE802  71
 #endif
+
+// ── Struct for ipmsg-style adapter info ─────────────────────────────────────
+// Holds each valid network interface's IP and calculated subnet broadcast.
+struct SNetInterface {
+    CString csIP;
+    CString csBroadcast;
+    CString csDesc;
+    ULONG   maskBits;
+};
+
 CUdpDiscoveryThread::CUdpDiscoveryThread()
 {
     m_running = false;
@@ -70,17 +63,14 @@ CString CUdpDiscoveryThread::GetUsernameSafe()
     return cs;
 }
 
-ULONG CUdpDiscoveryThread::IPv4ToUlong(const CString& csIP)
+CString CUdpDiscoveryThread::MakeBroadcastAddr(ULONG ip, const CString& csMask)
 {
-    CStringA csA = CTextConvert::UnicodeToAnsi(csIP);
-    ULONG ul = inet_addr(csA);
-    return ul;
-}
-CString CUdpDiscoveryThread::MakeBroadcastAddr(ULONG ip, ULONG maskBits)
-{
-    ULONG hostMask = (maskBits == 32) ? 0 :
-        0xFFFFFFFFUL << (32 - maskBits);
-    ULONG br = ip | hostMask;
+    CStringA csMaskA = CTextConvert::UnicodeToAnsi(csMask);
+    ULONG mask = inet_addr(csMaskA);
+    if(mask == INADDR_NONE)
+        return _T("");
+
+    ULONG br = ip | (~mask);
     if(br == ip)
         return _T("");
 
@@ -152,163 +142,134 @@ bool CUdpDiscoveryThread::SetupSocket()
     return true;
 }
 
-// ── ipmsg-style adapter enumeration using GetAdaptersAddresses ──────────────
-
+// ── ipmsg-style enumeration using GetAdaptersInfo ────────────────────────────
+// This matches the approach of the original IPMsg code which filters by
+// adapter type (not loopback, not tunnel) and IP class.
 CStringArray CUdpDiscoveryThread::DiscoverLocalIPs()
 {
     CStringArray arrIPs;
     CStringArray arrHostNames;
+    CString cs;
 
-    ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_DNS_SERVER |
-        GAA_FLAG_SKIP_FRIENDLY_NAME | GAA_FLAG_INCLUDE_PREFIX |
-        GAA_FLAG_INCLUDE_GATEWAYS;
-    ULONG family = AF_INET;
-
-    DWORD size = 0;
-    if(::GetAdaptersAddresses(family, flags, 0, 0, &size) != ERROR_BUFFER_OVERFLOW)
-    {
-        Log(_T("UdpDiscovery: GetAdaptersAddresses call 1 returned non-BUFFER_OVERFLOW"));
-        return arrIPs;
-    }
-
-    BYTE* buf = new BYTE[size];
-    if(buf == NULL)
+    DWORD dwBufLen = 15000;
+    PIP_ADAPTER_INFO pAdapterInfo = (PIP_ADAPTER_INFO)malloc(dwBufLen);
+    if(pAdapterInfo == NULL)
     {
         Log(_T("UdpDiscovery: malloc failed"));
         return arrIPs;
     }
 
-    ULONG ret = ::GetAdaptersAddresses(family, flags, 0,
-        (PIP_ADAPTER_ADDRESSES)buf, &size);
-
-    CString cs;
-    cs.Format(_T("UdpDiscovery: GetAdaptersAddresses ret=%u"), ret);
-    Log(cs);
-
-    if(ret != ERROR_SUCCESS)
+    ULONG dwRet = GetAdaptersInfo(pAdapterInfo, &dwBufLen);
+    if(dwRet != ERROR_SUCCESS)
     {
-        delete[] buf;
+        free(pAdapterInfo);
+        cs.Format(_T("UdpDiscovery: GetAdaptersInfo failed: %u"), dwRet);
+        Log(cs);
         return arrIPs;
     }
 
-    PIP_ADAPTER_ADDRESSES pAdapter = (PIP_ADAPTER_ADDRESSES)buf;
-    CString csSelDesc;
+    PIP_ADAPTER_INFO pAdapter = pAdapterInfo;
+    BOOL bFirstAdapter = TRUE;
 
-    while(pAdapter)
+    while(pAdapter != NULL)
     {
-        // ipmsg filters:
-        // - OperStatus == IfOperStatusUp
-        // - PhysicalAddressLength > 0
-        // - IfType != IF_TYPE_SOFTWARE_LOOPBACK
-        // - IfType != IF_TYPE_TUNNEL
+        CString csDesc = pAdapter->Description;
+
+        // ipmsg-style filters:
+        // - IfType == IF_TYPE_SOFTWARE_LOOPBACK → skip
+        // - IfType == IF_TYPE_TUNNEL           → skip
+        // - IfType == IF_TYPE_ETHERNET_PPP    → allowed (VPN)
         BOOL bSkip = FALSE;
-        if(pAdapter->OperStatus != IfOperStatusUp)
+        if(pAdapter->Type == IF_TYPE_SOFTWARE_LOOPBACK)
             bSkip = TRUE;
-        else if(pAdapter->PhysicalAddressLength <= 0)
-            bSkip = TRUE;
-        else if(pAdapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
-            bSkip = TRUE;
-        else if(pAdapter->IfType == IF_TYPE_TUNNEL)
+        else if(pAdapter->Type == IF_TYPE_TUNNEL)
             bSkip = TRUE;
 
-        CString csDesc;
-        if(pAdapter->Description)
-            csDesc = pAdapter->Description;
-        else
-            csDesc = _T("(unknown)");
-
-        cs.Format(_T("UdpDiscovery: adapter IfType=%u OperStatus=%u Desc=%s skip=%d"),
-            pAdapter->IfType, pAdapter->OperStatus, csDesc, bSkip);
+        cs.Format(_T("UdpDiscovery: adapter IfType=%u Desc=%s skip=%d"),
+            pAdapter->Type, csDesc, bSkip);
         Log(cs);
 
         if(!bSkip)
         {
             BOOL bFirst = TRUE;
-
-            for(PIP_UNICAST_ADDRESS pUnicast = pAdapter->FirstUnicastAddress;
-                pUnicast != NULL;
-                pUnicast = pUnicast->Next)
+            PIP_ADDR_STRING pAddr = &(pAdapter->IpAddressList);
+            while(pAddr != NULL)
             {
-                if(pUnicast->Address.lpSockaddr->sa_family != AF_INET)
-                    continue;
-                if(pUnicast->Flags & IP_ADAPTER_ADDRESS_TRANSIENT)
-                    continue;
+                CString csIP(pAddr->IpAddress.String);
+                CString csMask(pAddr->IpMask.String);
 
-                sockaddr_in* pSin = (sockaddr_in*)pUnicast->Address.lpSockaddr;
-                ULONG ip = pSin->sin_addr.S_un.S_addr;
-                ULONG mask = pUnicast->OnLinkPrefixLength;
-
-                if(mask == 0)
+                // Skip loopback
+                if(csIP.Find(_T("127.")) >= 0)
+                {
+                    pAddr = pAddr->Next;
                     continue;
+                }
 
                 // Skip link-local (169.254.x.x)
-                ULONG ipHostOrder = ntohl(ip);
-                if((ipHostOrder >> 16) == 0xA9FE)
+                if(csIP.Find(_T("169.254.")) >= 0)
                 {
-                    cs.Format(_T("UdpDiscovery:   SKIP 169.254.x.x"));
-                    Log(cs);
+                    pAddr = pAddr->Next;
                     continue;
                 }
 
-                CString csIP;
-                csIP.Format(_T("%d.%d.%d.%d"),
-                    BYTE(ip), BYTE(ip >> 8), BYTE(ip >> 16), BYTE(ip >> 24));
-
-                CString csBr = MakeBroadcastAddr(ip, mask);
-
-                cs.Format(_T("UdpDiscovery:   VALID ip=%s mask=/ %u br=%s"),
-                    csIP, mask, csBr);
-                Log(cs);
-
-                arrIPs.Add(csIP);
-
-                // DNS lookup for hostname
-                CStringA csIPA = CTextConvert::UnicodeToAnsi(csIP);
-                struct hostent* pHost = gethostbyaddr(csIPA,
-                    sizeof(struct in_addr), AF_INET);
-                CString csNameA;
-                if(pHost && pHost->h_name)
-                    csNameA = CStringA(pHost->h_name);
-                if(csNameA.GetLength() > 0)
-                    arrHostNames.Add(csNameA);
-                else
-                    arrHostNames.Add(_T(""));
-
-                if(csBr.GetLength() > 0)
-                    m_broadcasts.Add(csBr);
-
-                if(bFirst)
+                // Skip zero IP
+                if(csIP.Compare(_T("0.0.0.0")) == 0)
                 {
-                    m_selectedIP = csIP;
-                    m_selectedDesc = csDesc;
-                    bFirst = FALSE;
+                    pAddr = pAddr->Next;
+                    continue;
                 }
-            }
-        }
-        else
-        {
-            // Even for skipped adapters, log any IPs for debugging
-            for(PIP_UNICAST_ADDRESS pUnicast = pAdapter->FirstUnicastAddress;
-                pUnicast != NULL;
-                pUnicast = pUnicast->Next)
-            {
-                if(pUnicast->Address.lpSockaddr->sa_family == AF_INET)
+
+                // ipmsg: only pick "normal" Ethernet interfaces
+                // (skip Hyper-V virtual switches)
+                if(pAdapter->Type == IF_TYPE_IEEE802 ||
+                   pAdapter->Type == IF_TYPE_ETHERNET_CSMACD)
                 {
-                    sockaddr_in* pSin = (sockaddr_in*)pUnicast->Address.lpSockaddr;
-                    ULONG ip = pSin->sin_addr.S_un.S_addr;
-                    CString csIP;
-                    csIP.Format(_T("%d.%d.%d.%d"),
-                        BYTE(ip), BYTE(ip >> 8), BYTE(ip >> 16), BYTE(ip >> 24));
-                    cs.Format(_T("UdpDiscovery:   [SKIP adapter] ip=%s"), csIP);
+                    CString csBr = MakeBroadcastAddr(
+                        inet_addr(CTextConvert::UnicodeToAnsi(csIP)), csMask);
+
+                    cs.Format(_T("UdpDiscovery:   VALID ip=%s mask=%s br=%s"),
+                        csIP, csMask, csBr);
+                    Log(cs);
+
+                    arrIPs.Add(csIP);
+
+                    // DNS lookup for hostname
+                    CStringA csIPA = CTextConvert::UnicodeToAnsi(csIP);
+                    struct hostent* pHost = gethostbyaddr(csIPA,
+                        sizeof(struct in_addr), AF_INET);
+                    CString csNameA;
+                    if(pHost && pHost->h_name)
+                        csNameA = CStringA(pHost->h_name);
+                    if(csNameA.GetLength() > 0)
+                        arrHostNames.Add(csNameA);
+                    else
+                        arrHostNames.Add(_T(""));
+
+                    if(csBr.GetLength() > 0)
+                        m_broadcasts.Add(csBr);
+
+                    if(bFirst)
+                    {
+                        m_selectedIP = csIP;
+                        m_selectedDesc = csDesc;
+                        bFirst = FALSE;
+                    }
+                }
+                else
+                {
+                    cs.Format(_T("UdpDiscovery:   SKIP ip=%s (non-Ethernet, IfType=%u)"),
+                        csIP, pAdapter->Type);
                     Log(cs);
                 }
+
+                pAddr = pAddr->Next;
             }
         }
 
         pAdapter = pAdapter->Next;
     }
 
-    delete[] buf;
+    free(pAdapterInfo);
 
     cs.Format(_T("UdpDiscovery: total %d local IP(s), %d broadcast(s)"),
         arrIPs.GetSize(), m_broadcasts.GetSize());
@@ -324,7 +285,8 @@ CStringArray CUdpDiscoveryThread::DiscoverLocalIPs()
         Log(cs);
     }
 
-    // Store own IPs and hostnames for self-filtering
+    m_ownIPs.RemoveAll();
+    m_ownHostNames.RemoveAll();
     m_ownIPs.Copy(arrIPs);
     m_ownHostNames.Copy(arrHostNames);
 
@@ -402,7 +364,6 @@ bool CUdpDiscoveryThread::ParseHeartbeat(const char* buf, int len,
     if(len <= 0)
         return false;
 
-    // Validate magic header "DittoHB|"
     const char* header = "DittoHB|";
     int headerLen = (int)strlen(header);
     if(len < headerLen)
@@ -412,11 +373,9 @@ bool CUdpDiscoveryThread::ParseHeartbeat(const char* buf, int len,
 
     const char* pStart = buf + headerLen;
     int contentLen = len - headerLen;
-
     if(contentLen <= 0)
         return false;
 
-    // Find name separator
     const char* pName = strchr(pStart, '|');
     CStringA csIPA, csNameA;
     if(pName)
@@ -526,14 +485,12 @@ void CUdpDiscoveryThread::Run()
 {
     CString cs;
 
-    // Phase 1: Setup WSA
     if(!SetupWSA())
     {
         Log(_T("UdpDiscovery: WSAStartup failed, aborting"));
         return;
     }
 
-    // Phase 2: Setup socket
     if(!SetupSocket())
     {
         Log(_T("UdpDiscovery: socket setup failed, aborting"));
@@ -541,7 +498,6 @@ void CUdpDiscoveryThread::Run()
         return;
     }
 
-    // Phase 3: Enumerate local IPs
     m_ownIPs.RemoveAll();
     m_ownHostNames.RemoveAll();
     m_broadcasts.RemoveAll();
@@ -597,7 +553,7 @@ void CUdpDiscoveryThread::Run()
                 CString csSenderIP(CTextConvert::Utf8ToUnicode(
                     CStringA(inet_ntoa(senderAddr.sin_addr))));
 
-                // Self-filter: skip if sender is one of our own IPs
+                // Self-filter
                 BOOL bSelf = FALSE;
                 for(int i = 0; i < m_ownIPs.GetSize(); i++)
                 {
