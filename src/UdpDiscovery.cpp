@@ -289,6 +289,8 @@ void CUdpDiscoveryThread::DiscoverLocalIPs()
         if(m_selectedName.GetLength() == 0)
             m_selectedName = m_computerName;
     }
+
+}
 bool CUdpDiscoveryThread::IsIPInFriends(const CString& csIP)
 {
     CString csTarget = csIP;
