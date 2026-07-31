@@ -116,9 +116,9 @@ void CUdpDiscoveryThread::AddIPToFriends(const CString& csIP)
 		CGetSetOptions::SetSendClients(client, nPos);
 		CGetSetOptions::GetClientSendCount();
 
-		CString cs;
-		cs.Format(_T("UdpDiscovery: auto-added friend %s"), csDesc);
-		LogSendRecieveInfo(cs);
+	CString cs;
+	cs.Format(_T("UdpDiscovery: auto-added friend %s"), csDesc);
+	Log(cs);
 	}
 }
 
@@ -143,13 +143,13 @@ void CUdpDiscoveryThread::SendHeartbeat()
 	{
 		CString cs;
 		cs.Format(_T("UdpDiscovery: sendto failed err=%d"), WSAGetLastError());
-		LogSendRecieveInfo(cs);
+		Log(cs);
 	}
 	else
 	{
 		CString cs;
 		cs.Format(_T("UdpDiscovery: heartbeat sent (IP=%s Name=%s)"), m_localIP, m_computerName);
-		LogSendRecieveInfo(cs);
+		Log(cs);
 	}
 }
 
@@ -192,7 +192,7 @@ void CUdpDiscoveryThread::Run()
 	if(nWSA != 0)
 	{
 		cs.Format(_T("UdpDiscovery: WSAStartup failed err=%d"), nWSA);
-		LogSendRecieveInfo(cs);
+		Log(cs);
 		return;
 	}
 
@@ -200,7 +200,7 @@ void CUdpDiscoveryThread::Run()
 	if(m_sock == INVALID_SOCKET)
 	{
 		cs.Format(_T("UdpDiscovery: socket creation failed err=%d"), WSAGetLastError());
-		LogSendRecieveInfo(cs);
+		Log(cs);
 		WSACleanup();
 		return;
 	}
@@ -209,12 +209,12 @@ void CUdpDiscoveryThread::Run()
 	if(setsockopt(m_sock, SOL_SOCKET, SO_BROADCAST, (const char*)&bOpt, sizeof(bOpt)) == SOCKET_ERROR)
 	{
 		cs.Format(_T("UdpDiscovery: SO_BROADCAST failed err=%d"), WSAGetLastError());
-		LogSendRecieveInfo(cs);
+		Log(cs);
 	}
 	if(setsockopt(m_sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&bOpt, sizeof(bOpt)) == SOCKET_ERROR)
 	{
 		cs.Format(_T("UdpDiscovery: SO_REUSEADDR failed err=%d"), WSAGetLastError());
-		LogSendRecieveInfo(cs);
+		Log(cs);
 	}
 
 	sockaddr_in localAddr;
@@ -225,7 +225,7 @@ void CUdpDiscoveryThread::Run()
 	if(bind(m_sock, (sockaddr*)&localAddr, sizeof(localAddr)) == SOCKET_ERROR)
 	{
 		cs.Format(_T("UdpDiscovery: bind failed err=%d"), WSAGetLastError());
-		LogSendRecieveInfo(cs);
+		Log(cs);
 		closesocket(m_sock);
 		m_sock = INVALID_SOCKET;
 		WSACleanup();
@@ -233,11 +233,11 @@ void CUdpDiscoveryThread::Run()
 	}
 
 	cs.Format(_T("UdpDiscovery: listening on UDP port %d"), UDP_DISCOVERY_PORT);
-	LogSendRecieveInfo(cs);
+	Log(cs);
 
 	m_localIP = GetLocalIPAddress();
 	cs.Format(_T("UdpDiscovery: local IP=%s Name=%s"), m_localIP, m_computerName);
-	LogSendRecieveInfo(cs);
+	Log(cs);
 
 	DWORD lastHeartbeat = GetTickCount();
 	DWORD lastStartupHB = GetTickCount();
@@ -315,7 +315,7 @@ void CUdpDiscoveryThread::Start()
 
 	CString cs;
 	cs.Format(_T("UdpDiscovery: starting thread"));
-	LogSendRecieveInfo(cs);
+	Log(cs);
 
 	m_running = true;
 	m_lock.Unlock();
@@ -324,7 +324,7 @@ void CUdpDiscoveryThread::Start()
 	if(m_threadHandle)
 	{
 		cs.Format(_T("UdpDiscovery: thread started id=%d"), m_threadId);
-		LogSendRecieveInfo(cs);
+		Log(cs);
 	}
 }
 
@@ -339,7 +339,7 @@ void CUdpDiscoveryThread::Stop()
 
 	CString cs;
 	cs.Format(_T("UdpDiscovery: stopping thread"));
-	LogSendRecieveInfo(cs);
+	Log(cs);
 
 	m_running = false;
 
@@ -352,12 +352,12 @@ void CUdpDiscoveryThread::Stop()
 	if(dwWait == WAIT_TIMEOUT)
 	{
 		cs.Format(_T("UdpDiscovery: thread timeout, force closing"));
-		LogSendRecieveInfo(cs);
+		Log(cs);
 	}
 	else
 	{
 		cs.Format(_T("UdpDiscovery: thread stopped cleanly"));
-		LogSendRecieveInfo(cs);
+		Log(cs);
 	}
 
 	CloseHandle(m_threadHandle);

@@ -453,6 +453,7 @@ void CCP_MainApp::CloseNoDbWindow()
 
 void CCP_MainApp::AfterMainCreate()
 {
+	Log(_T("AfterMainCreate: start"));
 	m_MainhWnd = m_pMainFrame->m_hWnd;
 	ASSERT( ::IsWindow(m_MainhWnd) );
 	CGetSetOptions::SetMainHWND((long)(LONG_PTR)m_MainhWnd);
@@ -515,6 +516,7 @@ void CCP_MainApp::AfterMainCreate()
 #endif
 	
 	m_bAppRunning = true;
+	Log(_T("AfterMainCreate: done"));
 }
 
 void CCP_MainApp::LoadGlobalClips()
@@ -585,9 +587,18 @@ void CCP_MainApp::StopServerThread()
 
 void CCP_MainApp::StartUdpDiscovery()
 {
+	CString cs;
+	cs.Format(_T("UdpDiscovery: GetDisableRecieve=%d, GetAllowFriends=%d"), CGetSetOptions::GetDisableRecieve(), CGetSetOptions::GetAllowFriends());
+	Log(cs);
+
 	if(CGetSetOptions::GetDisableRecieve() == FALSE && CGetSetOptions::GetAllowFriends())
 	{
 		m_UdpDiscovery.Start();
+	}
+	else
+	{
+		cs.Format(_T("UdpDiscovery: SKIPPED (DisableRecieve=%d, AllowFriends=%d)"), CGetSetOptions::GetDisableRecieve(), CGetSetOptions::GetAllowFriends());
+		Log(cs);
 	}
 }
 
