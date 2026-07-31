@@ -247,16 +247,7 @@ void CUdpDiscoveryThread::Run()
 	{
 		DWORD now = GetTickCount();
 
-		// Send startup heartbeat immediately (within first 30s), then periodic every 30s
-		if(now - lastStartupHB < 30000)
-		{
-			// First heartbeat right away on startup
-			if(lastHeartbeat == lastStartupHB)
-			{
-				SendHeartbeat();
-			}
-		}
-
+		// Send heartbeat every 30s
 		if(now - lastHeartbeat >= UDP_DISCOVERY_INTERVAL_MS)
 		{
 			SendHeartbeat();
@@ -282,11 +273,15 @@ void CUdpDiscoveryThread::Run()
 			{
 				CString csSenderIP(CTextConvert::Utf8ToUnicode(CStringA(inet_ntoa(senderAddr.sin_addr))));
 
+                // Ignore our own heartbeat
+                if(csSenderIP == m_localIP)
+                    continue;
+
 				CString csPeerIP, csPeerName;
 				if(ParseHeartbeat(recvBuf, nRecv, csPeerIP, csPeerName))
                 {
                     cs.Format(_T("UdpDiscovery: received from %s (peer=%s, name=%s)"), csSenderIP, csPeerIP, csPeerName);
-                    LogSendRecieveInfo(cs);
+                    Log(cs);
 
                     if(csPeerIP.GetLength() > 0 && !IsIPInFriends(csPeerIP))
                     {
