@@ -567,7 +567,7 @@ void CUdpDiscoveryThread::Run()
                         csSenderIP, csPeerIP, csPeerName);
                     Log(cs);
 
-                    if(csPeerIP.GetLength() > 0 && !IsIPInFriends(csPeerIP))
+                    if(csPeerIP.GetLength() > 0 && csPeerIP == csSenderIP && !IsIPInFriends(csPeerIP))
                     {
                         AddIPToFriends(csPeerIP, csPeerName);
                     }
