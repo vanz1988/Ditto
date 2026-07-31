@@ -33,6 +33,7 @@ CUdpDiscoveryThread::~CUdpDiscoveryThread()
 CString CUdpDiscoveryThread::GetLocalIPAddress()
 {
 	CString csIP = _T("");
+	CString csAllIPs;
 	DWORD dwBufLen = 15000;
 	ULONG dwRet;
 
@@ -48,25 +49,87 @@ CString CUdpDiscoveryThread::GetLocalIPAddress()
 	}
 
 	PIP_ADAPTER_INFO pAdapter = pAdapterInfo;
+	CStringArray arrIPs;
 	while(pAdapter != NULL)
 	{
-		PIP_ADDR_STRING pAddr = &(pAdapter->IpAddressList);
-		while(pAddr != NULL)
+		CString csAdapterName(pAdapter->AdapterName);
+		CString csDescription(pAdapter->Description);
+
+		// Skip virtual adapters
+		BOOL bSkip = FALSE;
+		CString csLower = csAdapterName;
+		csLower.MakeLower();
+		CString csDescLower = csDescription;
+		csDescLower.MakeLower();
+
+		if(csLower.Find(_T("hyper-v")) >= 0 || csDescLower.Find(_T("hyper-v")) >= 0 ||
+		   csLower.Find(_T("vmware")) >= 0   || csDescLower.Find(_T("vmware")) >= 0 ||
+		   csLower.Find(_T("virtual")) >= 0  || csDescLower.Find(_T("virtual")) >= 0 ||
+		   csLower.Find(_T("vpc")) >= 0      || csDescLower.Find(_T("vpc")) >= 0 ||
+		   csLower.Find(_T("tunnel")) >= 0   || csDescLower.Find(_T("tunnel")) >= 0 ||
+		   csLower.Find(_T("ppp")) >= 0      || csDescLower.Find(_T("ppp")) >= 0)
 		{
-			CString csCurIP(pAddr->IpAddress.String);
-			if(csCurIP.Find(_T("127.")) == -1)
-			{
-				csIP = csCurIP;
-				break;
-			}
-			pAddr = pAddr->Next;
+			bSkip = TRUE;
 		}
-		if(csIP.GetLength() > 0)
-			break;
+
+		if(!bSkip)
+		{
+			PIP_ADDR_STRING pAddr = &(pAdapter->IpAddressList);
+			while(pAddr != NULL)
+			{
+				CString csCurIP(pAddr->IpAddress.String);
+
+				// Skip loopback
+                if(csCurIP.Find(_T("127.")) >= 0)
+                {
+                    pAddr = pAddr->Next;
+                    continue;
+                }
+
+				// Skip link-local auto-assigned addresses
+				if(csCurIP.Find(_T("169.254.")) >= 0)
+				{
+                    pAddr = pAddr->Next;
+                    continue;
+                }
+
+				// Skip Hyper-V virtual network addresses (typically 192.168.135.x)
+				if(csCurIP.Find(_T("192.168.135.")) >= 0)
+				{
+                    pAddr = pAddr->Next;
+                    continue;
+                }
+
+                csAllIPs += csCurIP + _T(" (") + csDescription + _T(") ");
+                arrIPs.Add(csCurIP);
+
+                pAddr = pAddr->Next;
+			}
+		}
+
 		pAdapter = pAdapter->Next;
 	}
 
 	free(pAdapterInfo);
+
+	// Log all found IPs for debugging
+	csAllIPs.Format(_T("UdpDiscovery: all local IPs found: %s"), csAllIPs);
+	Log(csAllIPs);
+
+	// Prefer wired/Ethernet adapter IP. Since we already filtered virtual adapters,
+	// just pick the first real IP we found.
+	if(arrIPs.GetSize() > 0)
+	{
+		csIP = arrIPs.GetAt(0);
+		CString cs;
+		cs.Format(_T("UdpDiscovery: selected local IP: %s"), csIP);
+		Log(cs);
+	}
+	else
+	{
+        Log(_T("UdpDiscovery: WARNING - no valid local IP found"));
+	}
+
 	return csIP;
 }
 
