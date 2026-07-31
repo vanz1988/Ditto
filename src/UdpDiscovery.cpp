@@ -13,16 +13,11 @@ CUdpDiscoveryThread::CUdpDiscoveryThread()
 	m_threadHandle = NULL;
 	m_threadId = 0;
 	m_sock = INVALID_SOCKET;
-	m_localIP = _T("");
 	m_computerName = _T("");
-	{
-		TCHAR szName[256];
-		DWORD dwLen = 256;
-		if(GetComputerName(szName, &dwLen))
-			m_computerName = szName;
-		else
-			m_computerName = _T("Ditto");
-	}
+	m_userName = _T("");
+	m_selectedIP = _T("");
+	m_selectedName = _T("");
+	m_selectedDesc = _T("");
 }
 
 CUdpDiscoveryThread::~CUdpDiscoveryThread()
@@ -30,107 +25,298 @@ CUdpDiscoveryThread::~CUdpDiscoveryThread()
 	Stop();
 }
 
-CString CUdpDiscoveryThread::GetLocalIPAddress()
+CString CUdpDiscoveryThread::GetComputerNameSafe()
 {
-	CString csIP = _T("");
-	CString csAllIPs;
-	DWORD dwBufLen = 15000;
-	ULONG dwRet;
+	CString cs;
+	TCHAR szName[256];
+	DWORD dwLen = 256;
+	if(GetComputerName(szName, &dwLen))
+		cs = szName;
+	else
+		cs = _T("Ditto");
+	return cs;
+}
 
-	PIP_ADAPTER_INFO pAdapterInfo = (PIP_ADAPTER_INFO)malloc(dwBufLen);
-	if(pAdapterInfo == NULL)
-		return csIP;
+CString CUdpDiscoveryThread::GetUsernameSafe()
+{
+	CString cs;
+	TCHAR szUser[256];
+	DWORD dwLen = 256;
+	if(GetUserName(szUser, &dwLen))
+		cs = szUser;
+	else
+		cs = _T("user");
+	return cs;
+}
 
-	dwRet = GetAdaptersInfo(pAdapterInfo, &dwBufLen);
-	if(dwRet != ERROR_SUCCESS)
+ULONG CUdpDiscoveryThread::IPv4ToUlong(const CString& csIP)
+{
+	ULONG ul = 0;
+	CStringA csA = CTextConvert::UnicodeToAnsi(csIP);
+	struct in_addr addr;
+	if(::inet_pton(AF_INET, csA, &addr) == 1)
+		ul = addr.S_un.S_addr;
+	else
+		ul = inet_addr(csA);
+	return ul;
+}
+
+CString CUdpDiscoveryThread::MakeBroadcastAddr(ULONG ip, ULONG maskBits)
+{
+	ULONG hostMask = (maskBits == 32) ? 0xFFFFFFFFUL :
+		0xFFFFFFFFUL << (32 - maskBits);
+	ULONG netMask = ~hostMask;
+	ULONG br = ip | hostMask;
+	// If broadcast == ip (point-to-point like /32), skip
+	if(br == ip)
+		return _T("");
+
+	CString cs;
+	cs.Format(_T("%lu.%lu.%lu.%lu"),
+		BYTE(br >> 24), BYTE((br >> 16) & 0xFF),
+		BYTE((br >> 8) & 0xFF), BYTE(br & 0xFF));
+	return cs;
+}
+
+bool CUdpDiscoveryThread::SetupWSA()
+{
+	WSADATA wsaData;
+	int nRet = WSAStartup(0x0202, &wsaData);
+	CString cs;
+	if(nRet != 0)
 	{
-		free(pAdapterInfo);
-		return csIP;
+		cs.Format(_T("UdpDiscovery: WSAStartup failed err=%d"), nRet);
+		Log(cs);
+		return false;
+	}
+	cs.Format(_T("UdpDiscovery: WSAStartup OK (version %u.%u)"),
+		LOBYTE(wsaData.wVersion), HIBYTE(wsaData.wVersion));
+	Log(cs);
+	return true;
+}
+
+bool CUdpDiscoveryThread::SetupSocket()
+{
+	m_sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+	CString cs;
+	if(m_sock == INVALID_SOCKET)
+	{
+		cs.Format(_T("UdpDiscovery: socket creation failed err=%d"), WSAGetLastError());
+		Log(cs);
+		return false;
 	}
 
-	PIP_ADAPTER_INFO pAdapter = pAdapterInfo;
-	CStringArray arrIPs;
-	while(pAdapter != NULL)
+	BOOL bOpt = TRUE;
+	if(::setsockopt(m_sock, SOL_SOCKET, SO_BROADCAST,
+		(const char*)&bOpt, sizeof(bOpt)) == SOCKET_ERROR)
 	{
-		CString csAdapterName(pAdapter->AdapterName);
-		CString csDescription(pAdapter->Description);
+		cs.Format(_T("UdpDiscovery: SO_BROADCAST failed err=%d"), WSAGetLastError());
+		Log(cs);
+	}
+	if(::setsockopt(m_sock, SOL_SOCKET, SO_REUSEADDR,
+		(const char*)&bOpt, sizeof(bOpt)) == SOCKET_ERROR)
+	{
+		cs.Format(_T("UdpDiscovery: SO_REUSEADDR failed err=%d"), WSAGetLastError());
+		Log(cs);
+	}
 
-		// Skip virtual adapters
+	sockaddr_in localAddr;
+	::ZeroMemory(&localAddr, sizeof(localAddr));
+	localAddr.sin_family = AF_INET;
+	localAddr.sin_port = htons(UDP_DISCOVERY_PORT);
+	localAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	if(::bind(m_sock, (sockaddr*)&localAddr, sizeof(localAddr)) == SOCKET_ERROR)
+	{
+		cs.Format(_T("UdpDiscovery: bind failed err=%d"), WSAGetLastError());
+		Log(cs);
+		::closesocket(m_sock);
+		m_sock = INVALID_SOCKET;
+		return false;
+	}
+
+	cs.Format(_T("UdpDiscovery: listening on UDP port %d"), UDP_DISCOVERY_PORT);
+	Log(cs);
+	return true;
+}
+
+// ── ipmsg-style adapter enumeration using GetAdaptersAddresses ──────────────
+
+CStringArray CUdpDiscoveryThread::DiscoverLocalIPs()
+{
+	CStringArray arrIPs;
+	CStringArray arrHostNames;
+	CStringArray arrBroadcasts;
+
+	ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_DNS_SERVER |
+		GAA_FLAG_SKIP_FRIENDLY_NAME | GAA_FLAG_INCLUDE_PREFIX |
+		GAA_FLAG_INCLUDE_GATEWAYS;
+	ULONG family = AF_INET;
+
+	DWORD size = 0;
+	if(::GetAdaptersAddresses(family, flags, 0, 0, &size) != ERROR_BUFFER_OVERFLOW)
+		return arrIPs;
+
+	BYTE* buf = new BYTE[size];
+	if(buf == NULL)
+		return arrIPs;
+
+	ULONG ret = ::GetAdaptersAddresses(family, flags, 0,
+		(PIP_ADAPTER_ADDRESSES)buf, &size);
+
+	CString cs;
+	cs.Format(_T("UdpDiscovery: GetAdaptersAddresses ret=%u"), ret);
+	Log(cs);
+
+	if(ret != ERROR_SUCCESS)
+	{
+		delete[] buf;
+		return arrIPs;
+	}
+
+	PIP_ADAPTER_ADDRESSES pAdapter = (PIP_ADAPTER_ADDRESSES)buf;
+	int nIdx = 0;
+	CString csAll;
+
+	while(pAdapter && nIdx < 200)
+	{
+		// ipmsg filters: OperStatus==Up, PhysicalAddressLength>0, not loopback
 		BOOL bSkip = FALSE;
-		CString csLower = csAdapterName;
-		csLower.MakeLower();
-		CString csDescLower = csDescription;
-		csDescLower.MakeLower();
-
-		if(csLower.Find(_T("hyper-v")) >= 0 || csDescLower.Find(_T("hyper-v")) >= 0 ||
-		   csLower.Find(_T("vmware")) >= 0   || csDescLower.Find(_T("vmware")) >= 0 ||
-		   csLower.Find(_T("virtual")) >= 0  || csDescLower.Find(_T("virtual")) >= 0 ||
-		   csLower.Find(_T("vpc")) >= 0      || csDescLower.Find(_T("vpc")) >= 0 ||
-		   csLower.Find(_T("tunnel")) >= 0   || csDescLower.Find(_T("tunnel")) >= 0 ||
-		   csLower.Find(_T("ppp")) >= 0      || csDescLower.Find(_T("ppp")) >= 0)
-		{
+		if(pAdapter->OperStatus != IfOperStatusUp)
 			bSkip = TRUE;
-		}
+		else if(pAdapter->PhysicalAddressLength <= 0)
+			bSkip = TRUE;
+		else if(pAdapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
+			bSkip = TRUE;
+		else if(pAdapter->IfType == IF_TYPE_TUNNEL)
+			bSkip = TRUE;
+
+		CString csDesc;
+		if(pAdapter->Description)
+			csDesc = pAdapter->Description;
+		else
+			csDesc = _T("(unknown)");
+
+		cs.Format(_T("UdpDiscovery: adapter[%d] IfType=%u OperStatus=%u Desc=%s skip=%d"),
+			nIdx, pAdapter->IfType, pAdapter->OperStatus, csDesc, bSkip);
+		Log(cs);
 
 		if(!bSkip)
 		{
-			PIP_ADDR_STRING pAddr = &(pAdapter->IpAddressList);
-			while(pAddr != NULL)
-			{
-				CString csCurIP(pAddr->IpAddress.String);
+			ULONG selectedIP = 0;
+			ULONG selectedMask = 0;
+			CString csSelDesc;
 
-				// Skip loopback
-                if(csCurIP.Find(_T("127.")) >= 0)
+			for(PIP_UNICAST_ADDRESS pUnicast = pAdapter->FirstUnicastAddress;
+			    pUnicast != NULL && nIdx < 200;
+			    pUnicast = pUnicast->Next)
+            {
+                if(!(pUnicast->Address.lpSockaddr->sa_family == AF_INET))
+                    continue;
+                if(pUnicast->Flags & IP_ADAPTER_ADDRESS_TRANSIENT)
+                    continue;
+
+                sockaddr_in* pSin = (sockaddr_in*)pUnicast->Address.lpSockaddr;
+                ULONG ip = pSin->sin_addr.S_un.S_addr;
+                ULONG mask = pUnicast->OnLinkPrefixLength;
+
+                if(mask == 0)
+                    continue;
+
+                // Skip link-local (169.254.x.x)
+                if((ip >> 16) == htonl(0xA9FE))
                 {
-                    pAddr = pAddr->Next;
+                    cs.Format(_T("UdpDiscovery:   SKIP 169.254.x.x"));
+                    Log(cs);
                     continue;
                 }
 
-				// Skip link-local auto-assigned addresses
-				if(csCurIP.Find(_T("169.254.")) >= 0)
-				{
-                    pAddr = pAddr->Next;
-                    continue;
+                CString csIP;
+                csIP.Format(_T("%d.%d.%d.%d"),
+                    BYTE(ip), BYTE(ip >> 8), BYTE(ip >> 16), BYTE(ip >> 24));
+
+                CString csBr = MakeBroadcastAddr(ip, mask);
+
+                cs.Format(_T("UdpDiscovery:   VALID ip=%s mask=/ %u br=%s"),
+                    csIP, mask, csBr);
+                Log(cs);
+
+                arrIPs.Add(csIP);
+                CString csHN;
+                if(arrHostNames.GetSize() > 0 && nIdx < arrHostNames.GetSize())
+                    csHN = arrHostNames.GetAt(arrHostNames.GetSize()-1);
+                else
+                    csHN = _T("");
+                arrHostNames.Add(_T(""));
+
+                // DNS lookup for hostname
+                CStringA csIPA = CTextConvert::UnicodeToAnsi(csIP);
+                struct hostent* pHost = gethostbyaddr(csIPA, sizeof(struct in_addr), AF_INET);
+                CString csNameA;
+                if(pHost && pHost->h_name)
+                    csNameA = CStringA(pHost->h_name);
+                if(csNameA.GetLength() > 0)
+                    arrHostNames.SetAt(arrHostNames.GetSize() - 1, csNameA);
+
+                arrBroadcasts.Add(csBr);
+
+                // Keep first valid IP as selected (primary)
+                if(selectedIP == 0)
+                {
+                    selectedIP = ip;
+                    selectedMask = mask;
+                    csSelDesc = csDesc;
                 }
 
-				// Skip Hyper-V virtual network addresses (typically 192.168.135.x)
-				if(csCurIP.Find(_T("192.168.135.")) >= 0)
-				{
-                    pAddr = pAddr->Next;
-                    continue;
+                nIdx++;
+            }
+		}
+		else
+		{
+			// Even for skipped adapters, log any IPs
+			for(PIP_UNICAST_ADDRESS pUnicast = pAdapter->FirstUnicastAddress;
+			    pUnicast != NULL;
+			    pUnicast = pUnicast->Next)
+            {
+                if(pUnicast->Address.lpSockaddr->sa_family == AF_INET)
+                {
+                    sockaddr_in* pSin = (sockaddr_in*)pUnicast->Address.lpSockaddr;
+                    ULONG ip = pSin->sin_addr.S_un.S_addr;
+                    CString csIP;
+                    csIP.Format(_T("%d.%d.%d.%d"),
+                        BYTE(ip), BYTE(ip >> 8), BYTE(ip >> 16), BYTE(ip >> 24));
+                    cs.Format(_T("UdpDiscovery:   [SKIP] ip=%s desc=%s"), csIP, csDesc);
+                    Log(cs);
                 }
-
-                csAllIPs += csCurIP + _T(" (") + csDescription + _T(") ");
-                arrIPs.Add(csCurIP);
-
-                pAddr = pAddr->Next;
-			}
+            }
 		}
 
 		pAdapter = pAdapter->Next;
 	}
 
-	free(pAdapterInfo);
+	delete[] buf;
 
-	// Log all found IPs for debugging
-	csAllIPs.Format(_T("UdpDiscovery: all local IPs found: %s"), csAllIPs);
-	Log(csAllIPs);
-
-	// Prefer wired/Ethernet adapter IP. Since we already filtered virtual adapters,
-	// just pick the first real IP we found.
-	if(arrIPs.GetSize() > 0)
+	CStringArray arrDescs;
+	cs.Format(_T("UdpDiscovery: found %d interface(s): "), arrIPs.GetSize());
+	Log(cs);
+	for(int i = 0; i < arrIPs.GetSize(); i++)
 	{
-		csIP = arrIPs.GetAt(0);
-		CString cs;
-		cs.Format(_T("UdpDiscovery: selected local IP: %s"), csIP);
+		CString csIP = arrIPs.GetAt(i);
+		CString csHN = (arrHostNames.GetSize() > i) ? arrHostNames.GetAt(i) : _T("");
+		CString csBr = (arrBroadcasts.GetSize() > i) ? arrBroadcasts.GetAt(i) : _T("");
+		cs.Format(_T("UdpDiscovery:   [%d] ip=%s host=%s br=%s"),
+			i, csIP, csHN, csBr);
 		Log(cs);
 	}
-	else
+
+	if(arrIPs.GetSize() > 0)
 	{
-        Log(_T("UdpDiscovery: WARNING - no valid local IP found"));
+		m_selectedIP = arrIPs.GetAt(0);
+		m_selectedName = (arrHostNames.GetSize() > 0) ? arrHostNames.GetAt(0) : _T("");
+		m_selectedDesc = csSelDesc;
 	}
 
-	return csIP;
+	return arrIPs;
 }
 
 bool CUdpDiscoveryThread::IsIPInFriends(const CString& csIP)
@@ -147,16 +333,13 @@ bool CUdpDiscoveryThread::IsIPInFriends(const CString& csIP)
 	return false;
 }
 
-void CUdpDiscoveryThread::AddIPToFriends(const CString& csIP)
+void CUdpDiscoveryThread::AddIPToFriends(const CString& csIP, const CString& csName)
 {
-	CString csHostName = _T("");
-	CStringA csIPA = CTextConvert::UnicodeToAnsi(csIP);
-	struct hostent* pHost = gethostbyaddr(csIPA, sizeof(struct in_addr), AF_INET);
-	if(pHost)
-		csHostName = pHost->h_name;
-
 	CString csDesc;
-	csDesc.Format(_T("%s (%s)"), csIP, csHostName);
+	if(csName.GetLength() > 0)
+		csDesc.Format(_T("%s (%s)"), csName, csIP);
+	else
+		csDesc = csIP;
 
 	int nPos = -1;
 	for(int i = 0; i < MAX_SEND_CLIENTS; i++)
@@ -179,59 +362,47 @@ void CUdpDiscoveryThread::AddIPToFriends(const CString& csIP)
 		CGetSetOptions::SetSendClients(client, nPos);
 		CGetSetOptions::GetClientSendCount();
 
-	CString cs;
-	cs.Format(_T("UdpDiscovery: auto-added friend %s"), csDesc);
-	Log(cs);
-	}
-}
-
-void CUdpDiscoveryThread::SendHeartbeat()
-{
-	if(m_sock == INVALID_SOCKET || m_localIP.GetLength() == 0)
-		return;
-
-	CStringA csIPA = CTextConvert::UnicodeToAnsi(m_localIP);
-	CStringA csNameA = CTextConvert::UnicodeToUTF8(m_computerName);
-
-	CStringA csMsg;
-	csMsg.Format("DittoHB|%s|%s", csIPA, csNameA);
-
-	sockaddr_in broadcastAddr;
-	broadcastAddr.sin_family = AF_INET;
-	broadcastAddr.sin_port = htons(UDP_DISCOVERY_PORT);
-	broadcastAddr.sin_addr.s_addr = inet_addr("255.255.255.255");
-
-	int nSent = sendto(m_sock, csMsg, (int)csMsg.GetLength(), 0, (sockaddr*)&broadcastAddr, sizeof(broadcastAddr));
-	if(nSent == SOCKET_ERROR)
-	{
 		CString cs;
-		cs.Format(_T("UdpDiscovery: sendto failed err=%d"), WSAGetLastError());
-		Log(cs);
-	}
-	else
-	{
-		CString cs;
-		cs.Format(_T("UdpDiscovery: heartbeat sent (IP=%s Name=%s)"), m_localIP, m_computerName);
+		cs.Format(_T("UdpDiscovery: auto-added friend %s"), csDesc);
 		Log(cs);
 	}
 }
 
-	bool CUdpDiscoveryThread::ParseHeartbeat(const char* buf, int len, CString& csIP, CString& csName)
+bool CUdpDiscoveryThread::ParseHeartbeat(const char* buf, int len,
+	CString& csIP, CString& csName)
 {
 	csIP = _T("");
 	csName = _T("");
 
-	if(len <= 0 || buf[0] != 'D' || buf[1] != 'i' || buf[2] != 't' || buf[3] != 't' ||
-		buf[4] != 'o' || buf[5] != 'H' || buf[6] != 'B' || buf[7] != '|')
+	if(len <= 0)
 		return false;
 
+	// Validate magic header "DittoHB|"
+	const char* header = "DittoHB|";
+	if(len < (int)strlen(header))
+		return false;
+	if(memcmp(buf, header, strlen(header)) != 0)
+		return false;
+
+	const char* pStart = buf + strlen(header);
+	int contentLen = len - (int)strlen(header);
+
+	if(contentLen <= 0)
+		return false;
+
+	CStringA csMsgA(pStart, contentLen);
+
+	const char* pName = strchr(pStart, '|');
 	CStringA csIPA, csNameA;
-	const char* pStart = buf + 8;
-	const char* pEnd = strchr(pStart, '|');
-	if(pEnd)
+	if(pName)
 	{
-		csIPA = CStringA(pStart, (int)(pEnd - pStart));
-		csNameA = CStringA(pEnd + 1, (int)(len - (pEnd - pStart) - 1));
+		int ipLen = (int)(pName - pStart);
+		csIPA = CStringA(pStart, ipLen);
+		csNameA = CStringA(pName + 1, (int)(contentLen - ipLen - 1));
+	}
+	else
+	{
+		csIPA = csMsgA;
 	}
 
 	csIP = CTextConvert::Utf8ToUnicode(csIPA);
@@ -239,6 +410,82 @@ void CUdpDiscoveryThread::SendHeartbeat()
 
 	return csIP.GetLength() > 0;
 }
+
+void CUdpDiscoveryThread::SendHeartbeat()
+{
+	if(m_sock == INVALID_SOCKET)
+		return;
+	if(m_selectedIP.GetLength() == 0)
+		return;
+
+	CStringA csIPA = CTextConvert::UnicodeToAnsi(m_selectedIP);
+	CStringA csNameA = CTextConvert::UnicodeToUTF8(m_computerName);
+
+	CStringA csMsg;
+	csMsg.Format("DittoHB|%s|%s", csIPA, csNameA);
+
+	CString cs;
+	cs.Format(_T("UdpDiscovery: heartbeat payload=%s"), csMsg);
+	Log(cs);
+
+	sockaddr_in sendAddr;
+	ULONG nBroadcasts = m_broadcasts.GetSize();
+
+	for(ULONG i = 0; i < nBroadcasts; i++)
+	{
+		CString csBr = m_broadcasts.GetAt(i);
+		CStringA csBrA = CTextConvert::UnicodeToAnsi(csBr);
+
+		ULONG ulBr = inet_addr(csBrA);
+		if(ulBr == INADDR_NONE)
+			continue;
+
+		::ZeroMemory(&sendAddr, sizeof(sendAddr));
+		sendAddr.sin_family = AF_INET;
+		sendAddr.sin_port = htons(UDP_DISCOVERY_PORT);
+		sendAddr.sin_addr.S_un.S_addr = ulBr;
+
+		int nSent = ::sendto(m_sock, csMsg, (int)csMsg.GetLength(), 0,
+			(sockaddr*)&sendAddr, sizeof(sendAddr));
+
+		CStringA csBrA2 = csBrA;
+		if(nSent == SOCKET_ERROR)
+		{
+			cs.Format(_T("UdpDiscovery: sendto br=%s failed err=%d"),
+				csBr, WSAGetLastError());
+			Log(cs);
+		}
+		else
+		{
+			cs.Format(_T("UdpDiscovery: sendto br=%s OK (len=%d)"),
+				csBr, nSent);
+			Log(cs);
+		}
+	}
+
+	// Fallback: also send to 255.255.255.255
+	ULONG nSentAll = 0;
+	::ZeroMemory(&sendAddr, sizeof(sendAddr));
+	sendAddr.sin_family = AF_INET;
+	sendAddr.sin_port = htons(UDP_DISCOVERY_PORT);
+	sendAddr.sin_addr.S_un.S_addr = htonl(INADDR_BROADCAST);
+
+	int nSent = ::sendto(m_sock, csMsg, (int)csMsg.GetLength(), 0,
+		(sockaddr*)&sendAddr, sizeof(sendAddr));
+	if(nSent == SOCKET_ERROR)
+	{
+		cs.Format(_T("UdpDiscovery: sendto 255.255.255.255 failed err=%d"),
+			WSAGetLastError());
+		Log(cs);
+	}
+	else
+	{
+		cs.Format(_T("UdpDiscovery: sendto 255.255.255.255 OK"));
+		Log(cs);
+	}
+}
+
+// ── Main thread loop ──────────────────────────────────────────────────────
 
 unsigned int __stdcall CUdpDiscoveryThread::ThreadFunc(void* thisptr)
 {
@@ -250,67 +497,44 @@ void CUdpDiscoveryThread::Run()
 {
 	CString cs;
 
-	WSADATA wsaData;
-	int nWSA = WSAStartup(0x0202, &wsaData);
-	if(nWSA != 0)
+	// Phase 1: Setup WSA
+	if(!SetupWSA())
 	{
-		cs.Format(_T("UdpDiscovery: WSAStartup failed err=%d"), nWSA);
-		Log(cs);
+		Log(_T("UdpDiscovery: WSAStartup failed, aborting"));
 		return;
 	}
 
-	m_sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if(m_sock == INVALID_SOCKET)
+	// Phase 2: Setup socket
+	if(!SetupSocket())
 	{
-		cs.Format(_T("UdpDiscovery: socket creation failed err=%d"), WSAGetLastError());
-		Log(cs);
+		Log(_T("UdpDiscovery: socket setup failed, aborting"));
 		WSACleanup();
 		return;
 	}
 
-	bool bOpt = true;
-	if(setsockopt(m_sock, SOL_SOCKET, SO_BROADCAST, (const char*)&bOpt, sizeof(bOpt)) == SOCKET_ERROR)
-	{
-		cs.Format(_T("UdpDiscovery: SO_BROADCAST failed err=%d"), WSAGetLastError());
-		Log(cs);
-	}
-	if(setsockopt(m_sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&bOpt, sizeof(bOpt)) == SOCKET_ERROR)
-	{
-		cs.Format(_T("UdpDiscovery: SO_REUSEADDR failed err=%d"), WSAGetLastError());
-		Log(cs);
-	}
+	// Phase 3: Enumerate local IPs
+	m_ownIPs = DiscoverLocalIPs();
 
-	sockaddr_in localAddr;
-	localAddr.sin_family = AF_INET;
-	localAddr.sin_port = htons(UDP_DISCOVERY_PORT);
-	localAddr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-	if(bind(m_sock, (sockaddr*)&localAddr, sizeof(localAddr)) == SOCKET_ERROR)
-	{
-		cs.Format(_T("UdpDiscovery: bind failed err=%d"), WSAGetLastError());
-		Log(cs);
-		closesocket(m_sock);
-		m_sock = INVALID_SOCKET;
-		WSACleanup();
-		return;
-	}
-
-	cs.Format(_T("UdpDiscovery: listening on UDP port %d"), UDP_DISCOVERY_PORT);
+	cs.Format(_T("UdpDiscovery: selected IP=%s Name=%s User=%s"),
+		m_selectedIP, m_selectedName, m_userName);
 	Log(cs);
 
-	m_localIP = GetLocalIPAddress();
-	cs.Format(_T("UdpDiscovery: local IP=%s Name=%s"), m_localIP, m_computerName);
-	Log(cs);
+	if(m_ownIPs.GetSize() == 0)
+	{
+		cs.Format(_T("UdpDiscovery: WARNING - no valid IP found, heartbeat disabled"));
+		Log(cs);
+	}
 
 	DWORD lastHeartbeat = GetTickCount();
-	DWORD lastStartupHB = GetTickCount();
 	char recvBuf[1024];
+
+	cs.Format(_T("UdpDiscovery: thread loop started, %d local IP(s)"), m_ownIPs.GetSize());
+	Log(cs);
 
 	while(m_running)
 	{
 		DWORD now = GetTickCount();
 
-		// Send heartbeat every 30s
 		if(now - lastHeartbeat >= UDP_DISCOVERY_INTERVAL_MS)
 		{
 			SendHeartbeat();
@@ -323,33 +547,56 @@ void CUdpDiscoveryThread::Run()
 
 		timeval tv;
 		tv.tv_sec = 0;
-		tv.tv_usec = 100000; // 100ms timeout
+		tv.tv_usec = 100000;
 
 		int sel = select(0, &fds, NULL, NULL, &tv);
 		if(sel > 0 && FD_ISSET(m_sock, &fds))
 		{
 			sockaddr_in senderAddr;
 			int senderLen = sizeof(senderAddr);
-			int nRecv = recvfrom(m_sock, recvBuf, sizeof(recvBuf)-1, 0, (sockaddr*)&senderAddr, &senderLen);
+			int nRecv = ::recvfrom(m_sock, recvBuf, sizeof(recvBuf) - 1,
+				0, (sockaddr*)&senderAddr, &senderLen);
 
 			if(nRecv > 0)
 			{
-				CString csSenderIP(CTextConvert::Utf8ToUnicode(CStringA(inet_ntoa(senderAddr.sin_addr))));
+                CString csSenderIP(CTextConvert::Utf8ToUnicode(
+                    CStringA(inet_ntoa(senderAddr.sin_addr))));
 
-                // Ignore our own heartbeat
-                if(csSenderIP == m_localIP)
-                    continue;
+				// Self-filter: skip if sender is one of our own IPs
+				BOOL bSelf = FALSE;
+                for(int i = 0; i < m_ownIPs.GetSize(); i++)
+                {
+                    if(csSenderIP == m_ownIPs.GetAt(i))
+                    {
+                        bSelf = TRUE;
+                        break;
+                    }
+                }
+
+				if(bSelf)
+				{
+					cs.Format(_T("UdpDiscovery: skipped own heartbeat from %s"), csSenderIP);
+					Log(cs);
+					continue;
+				}
 
 				CString csPeerIP, csPeerName;
 				if(ParseHeartbeat(recvBuf, nRecv, csPeerIP, csPeerName))
                 {
-                    cs.Format(_T("UdpDiscovery: received from %s (peer=%s, name=%s)"), csSenderIP, csPeerIP, csPeerName);
+                    cs.Format(_T("UdpDiscovery: received from %s (peer=%s name=%s)"),
+                        csSenderIP, csPeerIP, csPeerName);
                     Log(cs);
 
                     if(csPeerIP.GetLength() > 0 && !IsIPInFriends(csPeerIP))
                     {
-                        AddIPToFriends(csPeerIP);
+                        AddIPToFriends(csPeerIP, csPeerName);
                     }
+                }
+                else
+                {
+                    cs.Format(_T("UdpDiscovery: recv %d bytes from %s, not a heartbeat"),
+                        nRecv, csSenderIP);
+                    Log(cs);
                 }
 			}
 		}
@@ -357,9 +604,11 @@ void CUdpDiscoveryThread::Run()
 		Sleep(100);
 	}
 
-	closesocket(m_sock);
+	::closesocket(m_sock);
 	m_sock = INVALID_SOCKET;
 	WSACleanup();
+	cs.Format(_T("UdpDiscovery: thread loop ended"));
+	Log(cs);
 }
 
 void CUdpDiscoveryThread::Start()
@@ -375,14 +624,23 @@ void CUdpDiscoveryThread::Start()
 	cs.Format(_T("UdpDiscovery: starting thread"));
 	Log(cs);
 
+	m_computerName = GetComputerNameSafe();
+	m_userName = GetUsernameSafe();
+
 	m_running = true;
 	m_lock.Unlock();
 
 	m_threadHandle = (HANDLE)_beginthreadex(NULL, 0, ThreadFunc, this, 0, &m_threadId);
 	if(m_threadHandle)
 	{
-		cs.Format(_T("UdpDiscovery: thread started id=%d"), m_threadId);
+		cs.Format(_T("UdpDiscovery: thread started id=%u"), m_threadId);
 		Log(cs);
+	}
+	else
+	{
+		cs.Format(_T("UdpDiscovery: thread start failed err=%d"), GetLastError());
+		Log(cs);
+		m_running = false;
 	}
 }
 
@@ -402,8 +660,11 @@ void CUdpDiscoveryThread::Stop()
 	m_running = false;
 
 	if(m_sock != INVALID_SOCKET)
-		closesocket(m_sock);
-	m_sock = INVALID_SOCKET;
+	{
+		::closesocket(m_sock);
+		m_sock = INVALID_SOCKET;
+	}
+
 	m_lock.Unlock();
 
 	DWORD dwWait = WaitForSingleObject(m_threadHandle, 3000);
@@ -418,7 +679,10 @@ void CUdpDiscoveryThread::Stop()
 		Log(cs);
 	}
 
-	CloseHandle(m_threadHandle);
-	m_threadHandle = NULL;
-	m_threadId = 0;
+	if(m_threadHandle)
+	{
+		CloseHandle(m_threadHandle);
+		m_threadHandle = NULL;
+		m_threadId = 0;
+	}
 }
