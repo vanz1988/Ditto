@@ -25,7 +25,6 @@
 #include "ClipEditThread.h"
 #include "UdpDiscovery.h"
 
-
 extern class CCP_MainApp theApp;
 
 class CCP_MainApp : public CWinApp

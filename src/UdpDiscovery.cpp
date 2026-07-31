@@ -15,7 +15,14 @@ CUdpDiscoveryThread::CUdpDiscoveryThread()
 	m_sock = INVALID_SOCKET;
 	m_localIP = _T("");
 	m_computerName = _T("");
-	GetComputerName(&m_computerName);
+	{
+		TCHAR szName[256];
+		DWORD dwLen = 256;
+		if(GetComputerName(szName, &dwLen))
+			m_computerName = szName;
+		else
+			m_computerName = _T("Ditto");
+	}
 }
 
 CUdpDiscoveryThread::~CUdpDiscoveryThread()
@@ -65,10 +72,12 @@ CString CUdpDiscoveryThread::GetLocalIPAddress()
 
 bool CUdpDiscoveryThread::IsIPInFriends(const CString& csIP)
 {
-	CString csTarget = csIP.MakeUpper();
+	CString csTarget = csIP;
+	csTarget.MakeUpper();
 	for(int i = 0; i < MAX_SEND_CLIENTS; i++)
 	{
-		CString csCur = CGetSetOptions::m_SendClients[i].csIP.MakeUpper();
+		CString csCur = CGetSetOptions::m_SendClients[i].csIP;
+		csCur.MakeUpper();
 		if(csCur == csTarget)
 			return true;
 	}
@@ -144,7 +153,7 @@ void CUdpDiscoveryThread::SendHeartbeat()
 	}
 }
 
-bool CUdpDiscoveryThread::ParseHeartbeat(const char* buf, int len, CString& csIP, CString& csName)
+	bool CUdpDiscoveryThread::ParseHeartbeat(const char* buf, int len, CString& csIP, CString& csName)
 {
 	csIP = _T("");
 	csName = _T("");
@@ -153,11 +162,9 @@ bool CUdpDiscoveryThread::ParseHeartbeat(const char* buf, int len, CString& csIP
 		buf[4] != 'o' || buf[5] != 'H' || buf[6] != 'B' || buf[7] != '|')
 		return false;
 
-	CStringA csMsg(buf, len);
-
 	CStringA csIPA, csNameA;
-	char* pStart = buf + 8;
-	char* pEnd = strchr(pStart, '|');
+	const char* pStart = buf + 8;
+	const char* pEnd = strchr(pStart, '|');
 	if(pEnd)
 	{
 		csIPA = CStringA(pStart, (int)(pEnd - pStart));
@@ -299,15 +306,20 @@ void CUdpDiscoveryThread::Run()
 
 void CUdpDiscoveryThread::Start()
 {
-	ATL::CCritSecLock csLock(m_lock);
+	m_lock.Lock();
 	if(m_threadHandle)
+	{
+		m_lock.Unlock();
 		return;
+	}
 
 	CString cs;
 	cs.Format(_T("UdpDiscovery: starting thread"));
 	LogSendRecieveInfo(cs);
 
 	m_running = true;
+	m_lock.Unlock();
+
 	m_threadHandle = (HANDLE)_beginthreadex(NULL, 0, ThreadFunc, this, 0, &m_threadId);
 	if(m_threadHandle)
 	{
@@ -318,9 +330,12 @@ void CUdpDiscoveryThread::Start()
 
 void CUdpDiscoveryThread::Stop()
 {
-	ATL::CCritSecLock csLock(m_lock);
+	m_lock.Lock();
 	if(!m_threadHandle)
+	{
+		m_lock.Unlock();
 		return;
+	}
 
 	CString cs;
 	cs.Format(_T("UdpDiscovery: stopping thread"));
@@ -331,6 +346,7 @@ void CUdpDiscoveryThread::Stop()
 	if(m_sock != INVALID_SOCKET)
 		closesocket(m_sock);
 	m_sock = INVALID_SOCKET;
+	m_lock.Unlock();
 
 	DWORD dwWait = WaitForSingleObject(m_threadHandle, 3000);
 	if(dwWait == WAIT_TIMEOUT)

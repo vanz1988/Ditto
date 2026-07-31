@@ -1,7 +1,9 @@
 #pragma once
 #include <winsock2.h>
 #include <stdio.h>
-#include "CP_Main.h"
+#include "Options.h"
+#include "..\Shared\TextConvert.h"
+#include "Misc.h"
 
 #define UDP_DISCOVERY_PORT 23444
 #define UDP_DISCOVERY_INTERVAL_MS 30000
@@ -32,6 +34,6 @@ private:
 	CString GetLocalIPAddress();
 	bool IsIPInFriends(const CString& csIP);
 	void AddIPToFriends(const CString& csIP);
-	bool ParseMessage(const char* msg, CString& ip, CString& name);
+	bool ParseHeartbeat(const char* buf, int len, CString& ip, CString& name);
 	void SendHeartbeat();
 };
