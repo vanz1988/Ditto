@@ -4,6 +4,7 @@
 #include "Options.h"
 #include "..\Shared\TextConvert.h"
 #include <IPHlpApi.h>
+#include <ws2tcpip.h>
 
 #pragma comment(lib, "IPHlpApi.lib")
 
@@ -51,16 +52,10 @@ CString CUdpDiscoveryThread::GetUsernameSafe()
 
 ULONG CUdpDiscoveryThread::IPv4ToUlong(const CString& csIP)
 {
-    ULONG ul = 0;
     CStringA csA = CTextConvert::UnicodeToAnsi(csIP);
-    struct in_addr addr;
-    if(::inet_pton(AF_INET, csA, &addr) == 1)
-        ul = addr.S_un.S_addr;
-    else
-        ul = inet_addr(csA);
+    ULONG ul = inet_addr(csA);
     return ul;
 }
-
 CString CUdpDiscoveryThread::MakeBroadcastAddr(ULONG ip, ULONG maskBits)
 {
     ULONG hostMask = (maskBits == 32) ? 0 :
