@@ -392,75 +392,77 @@ void CUdpDiscoveryThread::SendHeartbeat()
 {
     if(m_sock == INVALID_SOCKET)
         return;
-    if(m_selectedIP.GetLength() == 0)
+    if(m_ownIPs.GetSize() == 0)
         return;
 
-    CStringA csIPA = CTextConvert::UnicodeToAnsi(m_selectedIP);
     CStringA csNameA = CTextConvert::UnicodeToUTF8(m_computerName);
-
-    CStringA csMsg;
-    csMsg.Format("DittoHB|%s|%s", csIPA, csNameA);
-
     CString cs;
-    cs.Format(_T("UdpDiscovery: heartbeat payload len=%d"), (int)csMsg.GetLength());
-    Log(cs);
 
-    // Send to each subnet broadcast
-    ULONG nBroadcasts = m_broadcasts.GetSize();
-    for(ULONG i = 0; i < nBroadcasts; i++)
+    ULONG nIps = m_ownIPs.GetSize();
+    ULONG nBrs = m_broadcasts.GetSize();
+
+    for(ULONG i = 0; i < nIps; i++)
     {
-        CString csBr = m_broadcasts.GetAt(i);
-        CStringA csBrA = CTextConvert::UnicodeToAnsi(csBr);
+        CString csIP = m_ownIPs.GetAt(i);
+        CStringA csIPA = CTextConvert::UnicodeToAnsi(csIP);
 
-        ULONG ulBr = inet_addr(csBrA);
-        if(ulBr == INADDR_NONE)
+        CStringA csMsg;
+        csMsg.Format("DittoHB|%s|%s", csIPA, csNameA);
+
+        if(i < nBrs)
         {
-            cs.Format(_T("UdpDiscovery: invalid broadcast addr %s"), csBr);
-            Log(cs);
-            continue;
+            CString csBr = m_broadcasts.GetAt(i);
+            CStringA csBrA = CTextConvert::UnicodeToAnsi(csBr);
+
+            ULONG ulBr = inet_addr(csBrA);
+            if(ulBr != INADDR_NONE)
+            {
+                sockaddr_in sendAddr;
+                ::ZeroMemory(&sendAddr, sizeof(sendAddr));
+                sendAddr.sin_family = AF_INET;
+                sendAddr.sin_port = htons(UDP_DISCOVERY_PORT);
+                sendAddr.sin_addr.S_un.S_addr = ulBr;
+
+                int nSent = ::sendto(m_sock, csMsg, (int)csMsg.GetLength(), 0,
+                    (sockaddr*)&sendAddr, sizeof(sendAddr));
+
+                if(nSent == SOCKET_ERROR)
+                {
+                    cs.Format(_T("UdpDiscovery: sendto br=%s ip=%s failed err=%d"),
+                        csBr, csIP, WSAGetLastError());
+                    Log(cs);
+                }
+                else
+                {
+                    cs.Format(_T("UdpDiscovery: sendto br=%s ip=%s OK"), csBr, csIP);
+                    Log(cs);
+                }
+            }
         }
 
-        sockaddr_in sendAddr;
-        ::ZeroMemory(&sendAddr, sizeof(sendAddr));
-        sendAddr.sin_family = AF_INET;
-        sendAddr.sin_port = htons(UDP_DISCOVERY_PORT);
-        sendAddr.sin_addr.S_un.S_addr = ulBr;
-
-        int nSent = ::sendto(m_sock, csMsg, (int)csMsg.GetLength(), 0,
-            (sockaddr*)&sendAddr, sizeof(sendAddr));
-
-        if(nSent == SOCKET_ERROR)
+        if(i == 0)
         {
-            cs.Format(_T("UdpDiscovery: sendto br=%s failed err=%d"),
-                csBr, WSAGetLastError());
-            Log(cs);
-        }
-        else
-        {
-            cs.Format(_T("UdpDiscovery: sendto br=%s OK"), csBr);
-            Log(cs);
-        }
-    }
+            sockaddr_in sendAddr;
+            ::ZeroMemory(&sendAddr, sizeof(sendAddr));
+            sendAddr.sin_family = AF_INET;
+            sendAddr.sin_port = htons(UDP_DISCOVERY_PORT);
+            sendAddr.sin_addr.S_un.S_addr = htonl(INADDR_BROADCAST);
 
-    // Fallback: 255.255.255.255
-    sockaddr_in sendAddr;
-    ::ZeroMemory(&sendAddr, sizeof(sendAddr));
-    sendAddr.sin_family = AF_INET;
-    sendAddr.sin_port = htons(UDP_DISCOVERY_PORT);
-    sendAddr.sin_addr.S_un.S_addr = htonl(INADDR_BROADCAST);
+            int nSent = ::sendto(m_sock, csMsg, (int)csMsg.GetLength(), 0,
+                (sockaddr*)&sendAddr, sizeof(sendAddr));
 
-    int nSent = ::sendto(m_sock, csMsg, (int)csMsg.GetLength(), 0,
-        (sockaddr*)&sendAddr, sizeof(sendAddr));
-    if(nSent == SOCKET_ERROR)
-    {
-        cs.Format(_T("UdpDiscovery: sendto 255.255.255.255 failed err=%d"),
-            WSAGetLastError());
-        Log(cs);
-    }
-    else
-    {
-        cs.Format(_T("UdpDiscovery: sendto 255.255.255.255 OK"));
-        Log(cs);
+            if(nSent == SOCKET_ERROR)
+            {
+                cs.Format(_T("UdpDiscovery: sendto 255.255.255.255 ip=%s failed err=%d"),
+                    csIP, WSAGetLastError());
+                Log(cs);
+            }
+            else
+            {
+                cs.Format(_T("UdpDiscovery: sendto 255.255.255.255 ip=%s OK"), csIP);
+                Log(cs);
+            }
+        }
     }
 }
 
@@ -496,10 +498,6 @@ void CUdpDiscoveryThread::Run()
     m_computerName = GetComputerNameSafe();
     m_userName = GetUsernameSafe();
     DiscoverLocalIPs();
-
-    cs.Format(_T("UdpDiscovery: selected IP=%s Name=%s"),
-        m_selectedIP, m_selectedName);
-    Log(cs);
 
     if(m_ownIPs.GetSize() == 0)
     {
