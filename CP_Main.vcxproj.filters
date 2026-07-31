@@ -383,7 +383,10 @@
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="src\UAC_Thread.cpp">
-      <Filter>src</Filter>
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UdpDiscovery.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\WildCardMatch.cpp">
       <Filter>src</Filter>

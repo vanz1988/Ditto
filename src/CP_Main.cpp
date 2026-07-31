@@ -508,6 +508,7 @@ void CCP_MainApp::AfterMainCreate()
 	g_HotKeys.RegisterAll();
 	StartCopyThread();
 	StartStopServerThread();
+	StartUdpDiscovery();
 
 #ifdef UNICODE
 	m_Addins.LoadAll();
@@ -582,12 +583,26 @@ void CCP_MainApp::StopServerThread()
 	closesocket(theApp.m_sSocket);
 }
 
+void CCP_MainApp::StartUdpDiscovery()
+{
+	if(CGetSetOptions::GetDisableRecieve() == FALSE && CGetSetOptions::GetAllowFriends())
+	{
+		m_UdpDiscovery.Start();
+	}
+}
+
+void CCP_MainApp::StopUdpDiscovery()
+{
+	m_UdpDiscovery.Stop();
+}
+
 void CCP_MainApp::BeforeMainClose()
 {
 	ASSERT( m_bAppRunning && !m_bAppExiting );
 	m_bAppRunning = false;
 	m_bAppExiting = true;
 	g_HotKeys.UnregisterAll();
+	StopUdpDiscovery();
 	StopServerThread();
 	StopCopyThread();
 }

@@ -23,6 +23,7 @@
 #include "UAC_Thread.h"
 #include "ICU_String.h"
 #include "ClipEditThread.h"
+#include "UdpDiscovery.h"
 
 
 extern class CCP_MainApp theApp;
@@ -157,6 +158,11 @@ public:
 	SOCKET	m_sSocket;
 	void	StartStopServerThread();
 	void	StopServerThread();
+
+	// UDP Discovery for auto-finding friends on LAN
+	CUdpDiscoveryThread	m_UdpDiscovery;
+	void	StartUdpDiscovery();
+	void	StopUdpDiscovery();
 
 	long	m_lClipsSent;
 	long	m_lClipsRecieved;
