@@ -219,16 +219,38 @@ void CMainFrmThread::OnSaveRemoteClips()
 
 	if(pLastClip && (pLastClip->m_param1 & REMOTE_CLIP_ADD_TO_CLIPBOARD))
 	{
-		LogSendRecieveInfo("---------OnSaveRemoteClips - Before Posting msg to main thread to set clipboard");
+		// Skip auto-paste for remote file clips: they trigger OnRenderGlobalData
+		// immediately, downloading to ReceivedFiles before user chooses where to paste.
+		// Keep them only in the DB; user will trigger the paste via hotkey.
+		bool bHasRemoteHDROP = FALSE;
+		POSITION pos = pLastClip->m_Formats.GetHeadPosition();
+		while(pos)
+		{
+            CClipFormat* pFmt = pLastClip->m_Formats.GetNext(pos);
+            if(pFmt->m_cfType == theApp.m_RemoteCF_HDROP)
+            {
+                bHasRemoteHDROP = TRUE;
+                break;
+            }
+		}
 
-		//set the clipboard on the main thread, i was having a problem with setting the clipboard on a thread
-		//guess it needs to be set on the main thread
-		//main window will clear this memory
-		PostMessage(theApp.m_MainhWnd, WM_LOAD_ClIP_ON_CLIPBOARD, (LPARAM)pLastClip, 0);
+        if(!bHasRemoteHDROP)
+        {
+            LogSendRecieveInfo("---------OnSaveRemoteClips - Before Posting msg to main thread to set clipboard");
 
-		LogSendRecieveInfo("---------OnSaveRemoteClips - After Posting msg to main thread to set clipboard");
+            //set the clipboard on the main thread, i was having a problem with setting the clipboard on a thread
+            //guess it needs to be set on the main thread
+            //main window will clear this memory
+            PostMessage(theApp.m_MainhWnd, WM_LOAD_ClIP_ON_CLIPBOARD, (LPARAM)pLastClip, 0);
 
-		pLocalClips->RemoveTail();
+            LogSendRecieveInfo("---------OnSaveRemoteClips - After Posting msg to main thread to set clipboard");
+
+            pLocalClips->RemoveTail();
+        }
+        else
+        {
+            LogSendRecieveInfo("---------OnSaveRemoteClips - Skipped auto-paste for remote file clip");
+        }
 	}	
 
 	theApp.RefreshView();
