@@ -511,6 +511,16 @@ void CUdpDiscoveryThread::Run()
     cs.Format(_T("UdpDiscovery: thread loop started, %d local IP(s)"), m_ownIPs.GetSize());
     Log(cs);
 
+    // Clear saved friends - discover fresh on each startup
+    CSendClients emptyClient;
+    for(int i = 0; i < MAX_SEND_CLIENTS; i++)
+    {
+        CGetSetOptions::SetSendClients(emptyClient, i);
+    }
+
+    // Broadcast immediately on startup
+    SendHeartbeat();
+
     while(m_running)
     {
         DWORD now = GetTickCount();

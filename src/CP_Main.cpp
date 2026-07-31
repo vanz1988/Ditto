@@ -465,7 +465,7 @@ void CCP_MainApp::AfterMainCreate()
 	m_pDittoHotKey2 = new CHotKey(CString("DittoHotKey2"));
 	m_pDittoHotKey3 = new CHotKey(CString("DittoHotKey3"));
 
-	m_pPosOne = new CHotKey("Position1", 0, true);
+	m_pPosOne = new CHotKey("Position1", 0x0356, true);
 	m_pPosTwo = new CHotKey("Position2", 0, true);
 	m_pPosThree = new CHotKey("Position3", 0, true);
 	m_pPosFour = new CHotKey("Position4", 0, true);
