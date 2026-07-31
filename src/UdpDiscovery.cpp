@@ -4,10 +4,30 @@
 #include "Options.h"
 #include "..\Shared\TextConvert.h"
 #include <IPHlpApi.h>
+
 #include <ws2tcpip.h>
 
 #pragma comment(lib, "IPHlpApi.lib")
 
+
+// IPCt.h types not available under WIN32_LEAN_AND_MEAN (VC_EXTRALEAN in StdAfx.h).
+// Define IP_UNICAST_ADDRESS here to iterate GetAdaptersAddresses output.
+#ifndef IP_UNICAST_ADDRESS_FLAG_DNS_ELIGIBLE
+#define IP_UNICAST_ADDRESS_FLAG_DNS_ELIGIBLE       0x10
+#define IP_ADAPTER_ADDRESS_TRANSIENT              0x20
+typedef struct _IP_UNICAST_ADDRESS {
+    union {
+        ULONG  Alignment;
+        struct {
+            USHORT  AddressLength;
+            USHORT  InterfaceIndex;
+            ULONG   AddressFlags;
+        };
+    };
+    ADDRESS_FAMILY Address;
+    struct _IP_UNICAST_ADDRESS *Next;
+} IP_UNICAST_ADDRESS, *PIP_UNICAST_ADDRESS, *PIP_UNICAST_ADDRESS_LH;
+#endif
 CUdpDiscoveryThread::CUdpDiscoveryThread()
 {
     m_running = false;
