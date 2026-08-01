@@ -12,6 +12,7 @@
 #include <regex>
 #include <vector>
 #include <shlobj.h>
+#include <shlwapi.h>
 
 CString GetIPAddress()
 {
@@ -263,25 +264,38 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 
 	HWND hWnd = ::GetForegroundWindow();
 	if(hWnd == NULL)
+	{
+		Log(_T("GetTargetDir: hWnd is NULL"));
 		return FALSE;
+	}
 
 	TCHAR szClass[256];
+	TCHAR szTitle[512];
 	DWORD nLen = ::GetClassName(hWnd, szClass, _countof(szClass));
+	::GetWindowText(hWnd, szTitle, _countof(szTitle));
+	CString csTitle(szTitle);
+	Log(StrF(_T("GetTargetDir: hWnd=%p class=%s title=%s"), hWnd, szClass, csTitle));
+
 	if(nLen > 0 && nLen < _countof(szClass) &&
 	   (_tcsicmp(szClass, _T("CabinetWClass")) != 0 &&
 		_tcsicmp(szClass, _T("ExploreWClass")) != 0))
 	{
+		Log(_T("GetTargetDir: not CabinetWClass or ExploreWClass"));
 		return FALSE;
 	}
 
 	typedef HRESULT(__stdcall *AOFW_t)(HWND, DWORD_PTR, REFIID, void**);
 	HMODULE hOleacc = ::LoadLibrary(_T("oleacc.dll"));
 	if(hOleacc == NULL)
+	{
+		Log(_T("GetTargetDir: LoadLibrary oleacc.dll failed"));
 		return FALSE;
+	}
 
 	AOFW_t fn = (AOFW_t)::GetProcAddress(hOleacc, "AccessibleObjectFromWindow");
 	if(fn == NULL)
 	{
+		Log(_T("GetTargetDir: GetProcAddress AccessibleObjectFromWindow failed"));
 		::FreeLibrary(hOleacc);
 		return FALSE;
 	}
@@ -291,32 +305,51 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 	::FreeLibrary(hOleacc);
 
 	if(FAILED(hr) || pBrowser == NULL)
+	{
+		Log(StrF(_T("GetTargetDir: AccessibleObjectFromWindow failed hr=0x%08X"), hr));
 		return FALSE;
+	}
 
 	BSTR bstrURL = NULL;
 	hr = pBrowser->get_LocationURL(&bstrURL);
 	pBrowser->Release();
 
 	if(FAILED(hr) || bstrURL == NULL)
+	{
+		Log(StrF(_T("GetTargetDir: get_LocationURL failed hr=0x%08X"), hr));
 		return FALSE;
+	}
 
 	CString csURL(bstrURL);
 	SysFreeString(bstrURL);
+	Log(StrF(_T("GetTargetDir: raw URL=%s"), csURL));
 
 	if(csURL.Find(_T("file:///")) == 0)
 		csURL = csURL.Mid(8);
 	else if(csURL.Find(_T("file://")) == 0)
 		csURL = csURL.Mid(7);
 
+	csURL.Replace('/', '\\');
+	Log(StrF(_T("GetTargetDir: path after slash fix=%s"), csURL));
+
+	CString csDecoded;
+	DWORD nChars = MAX_PATH;
+	if(UrlUnescapeW(csURL, csDecoded.GetBuffer(nChars), &nChars, 0) != FALSE)
+	{
+		csDecoded.ReleaseBuffer();
+		csURL = csDecoded;
+	}
+	Log(StrF(_T("GetTargetDir: path after UrlUnescape=%s"), csURL));
+
 	DWORD attrs = GetFileAttributes(csURL);
 	if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
 	{
 		csDir = csURL;
-		Log(StrF(_T("GetTargetDir: resolved dir=%s (AccessibleObjectFromWindow)"), csDir));
+		Log(StrF(_T("GetTargetDir: SUCCESS dir=%s"), csDir));
 		return TRUE;
 	}
 
-	Log(StrF(_T("GetTargetDir: file:// URL not a valid dir: %s"), csURL));
+	Log(StrF(_T("GetTargetDir: FAILED GetFileAttributes=%08X path=%s"), attrs, csURL));
 	return FALSE;
 }
 CString TopLevelWindowText(DWORD pid)
