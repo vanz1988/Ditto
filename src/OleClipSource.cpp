@@ -1402,6 +1402,13 @@ BOOL COleClipSource::OnRenderGlobalData(LPFORMATETC lpFormatEtc, HGLOBAL* phGlob
 					CClient cl;
 					Log(StrF(_T("OnRenderGlobalData: requesting file from remote %s"), ipPort));
 					hData = cl.RequestCopiedFiles(*pCF_HDROP, ipPort, namePort, csDestDir);
+					// Files already written to disk by UDP. Return NULL so Explorer
+					// doesn't also try a native paste (which causes duplicate file dialog).
+					if (csDestDir.GetLength() > 0 && hData != NULL)
+					{
+						Log(_T("OnRenderGlobalData: UDP done, skipping CF_HDROP to avoid duplicate paste"));
+						hData = NULL;
+					}
 				}
 			}
 				else
