@@ -332,11 +332,21 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 	csURL.Replace('/', '\\');
 	Log(StrF(_T("GetTargetDir: path after slash fix=%s"), csURL));
 
-	CString csDecoded;
+	CString csSrc = csURL;
+	LPTSTR pszSrc = csSrc.GetBuffer(MAX_PATH);
 	DWORD nChars = MAX_PATH;
-	if(UrlUnescapeW(csURL, csDecoded.GetBuffer(nChars), &nChars, 0) != FALSE)
+	CString csDecoded;
+	LPTSTR pszDest = csDecoded.GetBuffer(MAX_PATH);
+
+	if(UrlUnescapeW(pszSrc, pszDest, &nChars, 0) == FALSE)
 	{
-		csDecoded.ReleaseBuffer();
+		csSrc.ReleaseBuffer();
+		csDecoded.ReleaseBuffer(0);
+	}
+	else
+	{
+	csDecoded.ReleaseBuffer();
+		csSrc.ReleaseBuffer();
 		csURL = csDecoded;
 	}
 	Log(StrF(_T("GetTargetDir: path after UrlUnescape=%s"), csURL));
