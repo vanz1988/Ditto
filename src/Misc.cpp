@@ -12,7 +12,7 @@
 #include <regex>
 #include <vector>
 #include <shlobj.h>
-#import "shdocvw.dll" raw_interfaces_only raw_native_types no_namespace named_guids
+#include <shdocvw.h>
 
 CString GetIPAddress()
 {
@@ -264,8 +264,8 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 
 	HRESULT hr;
 
-	// Import IWebBrowser2 from shdocvw.dll (for get_LocationURL)
-		IUnknown *pUnk = NULL;
+
+	IUnknown *pUnk = NULL;
 	IDispatch *pDisp = NULL;
 	IShellWindows *pSW = NULL;
 
@@ -276,7 +276,7 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 	pUnk->Release();
 	if(FAILED(hr)) return FALSE;
 
-	hr = pDisp->QueryInterface(IID_PPV_ARGS(&pSW));
+	hr = pDisp->QueryInterface(IID_IShellWindows, (LPVOID*)&pSW);
 	pDisp->Release();
 	if(FAILED(hr)) return FALSE;
 
