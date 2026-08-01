@@ -123,7 +123,7 @@ void CFileSend::EnumerateDirectory(CString csDir, LPCTSTR csPrefix, CStringArray
 
 	do
 	{
-		if(strcmp(FindData.cFileName, ".") == 0 || strcmp(FindData.cFileName, "..") == 0)
+		if(_tcscmp(FindData.cFileName, _T(".")) == 0 || _tcscmp(FindData.cFileName, _T("..")) == 0)
 			continue;
 
 		CString csName = FindData.cFileName;
