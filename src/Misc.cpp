@@ -258,27 +258,143 @@ CString GetWndText(HWND hWnd)
 }
 BOOL GetTargetDirFromExplorer(CString &csDir)
 {
-	csDir.Empty();
-	HWND hWnd = ::GetForegroundWindow();
-	if(hWnd == NULL)
+\	csDir.Empty();
+	HWND hFG = ::GetForegroundWindow();
+	if(hFG == NULL)
 		return FALSE;
 
-	TCHAR szClass[256];
-	DWORD nLen = ::GetClassName(hWnd, szClass, _countof(szClass));
-	if(nLen == 0 || nLen >= _countof(szClass))
-		return FALSE;
+	TCHAR csFGClass[256];
+	GetClassName(hFG, csFGClass, _countof(csFGClass));
+	TCHAR csFGTitle[256];
+	GetWindowText(hFG, csFGTitle, _countof(csFGTitle));
+	Log(StrF(_T("GetTargetDir: fgWindow class=%s title=%s"), csFGClass, csFGTitle));
 
-	// Only handle Windows File Explorer windows
-	if(_tcsicmp(szClass, _T("CabinetWClass")) != 0 &&
-	   _tcsicmp(szClass, _T("ExploreWClass")) != 0)
-		return FALSE;
+	CString csTitle;
 
-	TCHAR szTitle[512];
-	nLen = ::GetWindowText(hWnd, szTitle, _countof(szTitle));
-	if(nLen == 0 || nLen >= _countof(szTitle))
-		return FALSE;
+	// Strategy 1: If foreground window IS an Explorer, use it
+	{
+		TCHAR szClass[256];
+		DWORD nLen = ::GetClassName(hFG, szClass, _countof(szClass));
+		if(nLen > 0 && nLen < _countof(szClass))
+		{
+			if(_tcsicmp(szClass, _T("CabinetWClass")) == 0 ||
+			   _tcsicmp(szClass, _T("ExploreWClass")) == 0)
+			{
+				csTitle = csFGTitle;
+			}
+		}
+	}
 
-	CString csTitle(szTitle);
+	// Strategy 2: Enumerate ALL top-level visible windows, find the most recent Explorer
+	// We need to track the Z-order to find the "highest" (most recent) Explorer window
+	struct ExplorerInfo
+	{
+		HWND hWnd;
+		CString csTitle;
+		int ZOrder;  // higher = more recent
+	};
+
+	ExplorerInfo best;
+	best.hWnd = NULL;
+	best.ZOrder = 0;
+
+	BOOL CALLBACK EnumWindowsProc_Helper(HWND hWnd, LPARAM lParam)
+	{
+		// Skip this process's own windows
+		DWORD pid;
+		DWORD tid = ::GetWindowThreadProcessId(hWnd, &pid);
+		if(tid == 0)
+			return TRUE;
+
+		// Skip invisible windows
+		if(!::IsWindowVisible(hWnd))
+			return TRUE;
+
+		// Must be a top-level window (no parent, or parent is desktop)
+		HWND hParent = ::GetParent(hWnd);
+		if(hParent && hParent != ::GetDesktopWindow())
+			return TRUE;
+
+		// Check if it's an Explorer window
+		TCHAR szClass[256];
+		DWORD nLen = ::GetClassName(hWnd, szClass, _countof(szClass));
+		if(nLen > 0 && nLen < _countof(szClass))
+		{
+			if(_tcsicmp(szClass, _T("CabinetWClass")) == 0 ||
+			   _tcsicmp(szClass, _T("ExploreWClass")) == 0)
+			{
+                TCHAR szTitle[512];
+                nLen = ::GetWindowText(hWnd, szTitle, _countof(szTitle));
+                if(nLen > 0)
+                {
+                    ExplorerInfo *pInfo = reinterpret_cast<ExplorerInfo*>(lParam);
+                    pInfo->hWnd = hWnd;
+                    pInfo->csTitle = szTitle;
+                }
+			}
+		}
+
+        return TRUE;
+    }
+
+    // We need a custom approach since we can't use a callback directly to return data.
+    // Instead, iterate all top-level windows manually using GetTopWindow/GetNextWindow
+    HWND hTop = ::GetTopWindow(::GetDesktopWindow());
+    int zOrder = 0;
+    while(hTop)
+    {
+        zOrder++;
+
+        // Skip invisible
+        if(!::IsWindowVisible(hTop))
+        {
+            hTop = ::GetNextWindow(hTop, GW_HWNDNEXT);
+            continue;
+        }
+
+        // Skip if has a parent (not truly top-level)
+        HWND hParent = ::GetParent(hTop);
+        if(hParent)
+        {
+            hTop = ::GetNextWindow(hTop, GW_HWNDNEXT);
+            continue;
+        }
+
+        // Check class
+        TCHAR szClass[256];
+        DWORD nLen = ::GetClassName(hTop, szClass, _countof(szClass));
+        if(nLen > 0 && nLen < _countof(szClass))
+        {
+            if(_tcsicmp(szClass, _T("CabinetWClass")) == 0 ||
+               _tcsicmp(szClass, _T("ExploreWClass")) == 0)
+            {
+                TCHAR szTitle[512];
+                nLen = ::GetWindowText(hTop, szTitle, _countof(szTitle));
+                if(nLen > 0)
+                {
+                    // Track the highest Z-order Explorer (last one = most recent)
+                    best.hWnd = hTop;
+                    best.csTitle = szTitle;
+                    best.ZOrder = zOrder;
+                }
+            }
+        }
+
+        hTop = ::GetNextWindow(hTop, GW_HWNDNEXT);
+    }
+
+    if(best.hWnd != NULL)
+    {
+        Log(StrF(_T("GetTargetDir: found Explorer window at ZOrder %d, title=%s"), best.ZOrder, best.csTitle));
+        csTitle = best.csTitle;
+    }
+    else
+    {
+        Log(_T("GetTargetDir: no Explorer window found in any top-level window"));
+    }
+
+    if(csTitle.IsEmpty())
+        return FALSE;
 
 	// Remove trailing " - File Explorer" (Win10/11)
 	int pos = csTitle.ReverseFind(_T('-'));
@@ -291,7 +407,7 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 		csTitle = csTitle.Left(pos).TrimRight();
 
 	// Remove trailing slash/backslash if present
-	csTitle = csTitle.TrimRight(_T("\\/"));
+	csTitle = csTitle.TrimRight(_T("\/"));
 	if(csTitle.GetLength() == 0)
 		return FALSE;
 
@@ -302,6 +418,7 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 		if(attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY))
 		{
 			csDir = csTitle;
+            Log(StrF(_T("GetTargetDir: resolved dir=%s"), csDir));
 			return TRUE;
 		}
 		return FALSE;
@@ -314,6 +431,7 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 		if(attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY))
 		{
 			csDir = csTitle;
+            Log(StrF(_T("GetTargetDir: resolved dir=%s (UNC)"), csDir));
 			return TRUE;
 		}
 		return FALSE;
@@ -321,7 +439,6 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 
 	return FALSE;
 }
-
 
 CString TopLevelWindowText(DWORD pid)
 {
