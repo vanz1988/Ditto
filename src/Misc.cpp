@@ -262,51 +262,31 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 {
 	csDir.Empty();
 
-	HWND hWnd = ::GetForegroundWindow();
-	if(hWnd == NULL)
+	HRESULT hr;
+
+	IMoniker *pMoniker = NULL;
+	hr = GetActiveObject(CLSID_WebBrowser, NULL, (IUnknown**)&pMoniker);
+	if(FAILED(hr) || pMoniker == NULL)
 	{
-		Log(_T("GetTargetDir: hWnd is NULL"));
+		Log(StrF(_T("GetTargetDir: GetActiveObject failed hr=0x%08X"), hr));
 		return FALSE;
 	}
 
-	TCHAR szClass[256];
-	TCHAR szTitle[512];
-	DWORD nLen = ::GetClassName(hWnd, szClass, _countof(szClass));
-	::GetWindowText(hWnd, szTitle, _countof(szTitle));
-	CString csTitle(szTitle);
-	Log(StrF(_T("GetTargetDir: hWnd=%p class=%s title=%s"), hWnd, szClass, csTitle));
-
-	if(nLen > 0 && nLen < _countof(szClass) &&
-	   (_tcsicmp(szClass, _T("CabinetWClass")) != 0 &&
-		_tcsicmp(szClass, _T("ExploreWClass")) != 0))
+	IUnknown *pUnknown = NULL;
+	hr = pMoniker->BindToObject(NULL, NULL, IID_IUnknown, (void**)&pUnknown);
+	pMoniker->Release();
+	if(FAILED(hr) || pUnknown == NULL)
 	{
-		Log(_T("GetTargetDir: not CabinetWClass or ExploreWClass"));
-		return FALSE;
-	}
-
-	typedef HRESULT(__stdcall *AOFW_t)(HWND, DWORD_PTR, REFIID, void**);
-	HMODULE hOleacc = ::LoadLibrary(_T("oleacc.dll"));
-	if(hOleacc == NULL)
-	{
-		Log(_T("GetTargetDir: LoadLibrary oleacc.dll failed"));
-		return FALSE;
-	}
-
-	AOFW_t fn = (AOFW_t)::GetProcAddress(hOleacc, "AccessibleObjectFromWindow");
-	if(fn == NULL)
-	{
-		Log(_T("GetTargetDir: GetProcAddress AccessibleObjectFromWindow failed"));
-		::FreeLibrary(hOleacc);
+		Log(StrF(_T("GetTargetDir: BindToObject failed hr=0x%08X"), hr));
 		return FALSE;
 	}
 
 	IWebBrowser2 *pBrowser = NULL;
-	HRESULT hr = fn(hWnd, (DWORD_PTR)-1, IID_IWebBrowser2, (void**)&pBrowser);
-	::FreeLibrary(hOleacc);
-
+	hr = pUnknown->QueryInterface(IID_IWebBrowser2, (LPVOID*)&pBrowser);
+	pUnknown->Release();
 	if(FAILED(hr) || pBrowser == NULL)
 	{
-		Log(StrF(_T("GetTargetDir: AccessibleObjectFromWindow failed hr=0x%08X"), hr));
+		Log(StrF(_T("GetTargetDir: QI IWebBrowser2 failed hr=0x%08X"), hr));
 		return FALSE;
 	}
 
@@ -345,7 +325,7 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 	}
 	else
 	{
-	csDecoded.ReleaseBuffer();
+		csDecoded.ReleaseBuffer();
 		csSrc.ReleaseBuffer();
 		csURL = csDecoded;
 	}
