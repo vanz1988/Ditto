@@ -11,6 +11,7 @@
 #include "Path.h"
 #include <regex>
 #include <vector>
+#include <shlobj.h>
 
 CString GetIPAddress()
 {
@@ -259,125 +260,80 @@ CString GetWndText(HWND hWnd)
 BOOL GetTargetDirFromExplorer(CString &csDir)
 {
 	csDir.Empty();
-	HWND hFG = ::GetForegroundWindow();
-	if(hFG == NULL)
-		return FALSE;
 
-	TCHAR csFGClass[256];
-	GetClassName(hFG, csFGClass, _countof(csFGClass));
-	TCHAR csFGTitle[256];
-	GetWindowText(hFG, csFGTitle, _countof(csFGTitle));
-	Log(StrF(_T("GetTargetDir: fgWindow class=%s title=%s"), csFGClass, csFGTitle));
+	IUnknown *pUnk = NULL;
+	IDispatch *pDisp = NULL;
+	IShellWindows *pSW = NULL;
 
-	CString csTitle;
+	HRESULT hr = CoCreateInstance(CLSID_ShellWindows, NULL, CLSCTX_ALL, IID_IUnknown, (LPVOID*)&pUnk);
+	if(FAILED(hr)) return FALSE;
 
-	// Strategy 1: If foreground window IS an Explorer, use it
+	hr = pUnk->QueryInterface(IID_IDispatch, (LPVOID*)&pDisp);
+	pUnk->Release();
+	if(FAILED(hr)) return FALSE;
+
+	hr = pDisp->QueryInterface(IID_PPV_ARGS(&pSW));
+	pDisp->Release();
+	if(FAILED(hr)) return FALSE;
+
+	long nCount;
+	if(pSW->get_Count(&nCount) != S_OK)
 	{
-		TCHAR szClass[256];
-		DWORD nLen = ::GetClassName(hFG, szClass, _countof(szClass));
-		if(nLen > 0 && nLen < _countof(szClass))
-		{
-			if(_tcsicmp(szClass, _T("CabinetWClass")) == 0 ||
-			   _tcsicmp(szClass, _T("ExploreWClass")) == 0)
-			{
-				csTitle = csFGTitle;
-			}
-		}
+		pSW->Release();
+		return FALSE;
 	}
 
-	// Strategy 2: Enumerate ALL top-level visible windows for Explorer
-	if(csTitle.IsEmpty())
+	for(long i = 0; i < nCount; i++)
 	{
-		HWND hTop = ::GetTopWindow(::GetDesktopWindow());
-		int zOrder = 0;
-		while(hTop)
+		IDispatch *pWin = NULL;
+		if(pSW->Item(CComVariant(i), &pWin) != S_OK) continue;
+
+		IServiceProvider *pSP = NULL;
+		if(pWin->QueryInterface(IID_IServiceProvider, (LPVOID*)&pSP) != S_OK)
 		{
-			zOrder++;
-			if(!::IsWindowVisible(hTop))
+			pWin->Release();
+			continue;
+		}
+
+		IFolderView *pFVS = NULL;
+		if(pSP->QueryService(SID_STopLevelBrowser, IID_IFolderView, (LPVOID*)&pFVS) != S_OK)
+		{
+			pSP->Release();
+			pWin->Release();
+			continue;
+		}
+		pSP->Release();
+
+		if(pFVS)
+		{
+			ITEMIDLIST *pidlDir = NULL;
+			if(pFVS->GetFolder(IID_PPV_ARGS(&pidlDir)) == S_OK && pidlDir)
 			{
-				hTop = ::GetNextWindow(hTop, GW_HWNDNEXT);
-				continue;
-			}
-			// Must be top-level (no parent)
-			HWND hParent = ::GetParent(hTop);
-			if(hParent)
-			{
-				hTop = ::GetNextWindow(hTop, GW_HWNDNEXT);
-				continue;
-			}
-			TCHAR szClass[256];
-			DWORD nLen = ::GetClassName(hTop, szClass, _countof(szClass));
-			if(nLen > 0 && nLen < _countof(szClass))
-			{
-				if(_tcsicmp(szClass, _T("CabinetWClass")) == 0 ||
-				   _tcsicmp(szClass, _T("ExploreWClass")) == 0)
+				TCHAR szPath[MAX_PATH];
+				if(SHGetPathFromIDList(pidlDir, szPath))
 				{
-					TCHAR szTitle[512];
-					nLen = ::GetWindowText(hTop, szTitle, _countof(szTitle));
-					if(nLen > 0)
+					DWORD attrs = GetFileAttributes(szPath);
+					if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
 					{
-						// Last Explorer found = most recent (highest Z-order)
-						csTitle = szTitle;
+						csDir = szPath;
+						Log(StrF(_T("GetTargetDir: resolved dir=%s (IShellWindows)"), csDir));
+						CoTaskMemFree(pidlDir);
+						pFVS->Release();
+						pWin->Release();
+						pSW->Release();
+						return TRUE;
 					}
 				}
+				CoTaskMemFree(pidlDir);
 			}
-
-			hTop = ::GetNextWindow(hTop, GW_HWNDNEXT);
+			pFVS->Release();
 		}
-
-		if(csTitle.GetLength() > 0)
-			Log(StrF(_T("GetTargetDir: found Explorer title=%s"), csTitle));
-		else
-			Log(_T("GetTargetDir: no Explorer window found in any top-level window"));
+		pWin->Release();
 	}
 
-	if(csTitle.GetLength() == 0)
-		return FALSE;
-
-	// Remove trailing " - File Explorer" (Win10/11)
-	int pos = csTitle.ReverseFind(_T('-'));
-	if(pos > 0 && csTitle.Right(16).CompareNoCase(_T(" - File Explorer")) == 0)
-		csTitle = csTitle.Left(pos).TrimRight();
-
-	// Remove trailing " - (read-only)"
-	pos = csTitle.ReverseFind(_T('-'));
-	if(pos > 0 && csTitle.Right(13).CompareNoCase(_T(" - (read-only)")) == 0)
-		csTitle = csTitle.Left(pos).TrimRight();
-
-	// Remove trailing slash/backslash if present
-	csTitle = csTitle.TrimRight(_T("\\/"));
-	if(csTitle.GetLength() == 0)
-		return FALSE;
-
-	// Check local drive path
-	if(csTitle.GetLength() >= 3 && csTitle[1] == _T(':'))
-	{
-		DWORD attr = GetFileAttributes(csTitle);
-		if(attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY))
-		{
-			csDir = csTitle;
-			Log(StrF(_T("GetTargetDir: resolved dir=%s"), csDir));
-			return TRUE;
-		}
-		return FALSE;
-	}
-
-	// Check UNC path
-	if(csTitle.GetLength() >= 2 && csTitle[0] == _T('\\'))
-	{
-		DWORD attr = GetFileAttributes(csTitle);
-		if(attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY))
-		{
-			csDir = csTitle;
-			Log(StrF(_T("GetTargetDir: resolved dir=%s (UNC)"), csDir));
-			return TRUE;
-		}
-		return FALSE;
-	}
-
+	pSW->Release();
 	return FALSE;
 }
-
 CString TopLevelWindowText(DWORD pid)
 {
 	std::pair<CString, DWORD> params = { _T(""), pid };
