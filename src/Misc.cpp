@@ -256,6 +256,72 @@ CString GetWndText(HWND hWnd)
 
 	return cWindowText;
 }
+BOOL GetTargetDirFromExplorer(CString &csDir)
+{
+	csDir.Empty();
+	HWND hWnd = ::GetForegroundWindow();
+	if(hWnd == NULL)
+		return FALSE;
+
+	TCHAR szClass[256];
+	DWORD nLen = ::GetClassName(hWnd, szClass, _countof(szClass));
+	if(nLen == 0 || nLen >= _countof(szClass))
+		return FALSE;
+
+	// Only handle Windows File Explorer windows
+	if(_tcsicmp(szClass, _T("CabinetWClass")) != 0 &&
+	   _tcsicmp(szClass, _T("ExploreWClass")) != 0)
+		return FALSE;
+
+	TCHAR szTitle[512];
+	nLen = ::GetWindowText(hWnd, szTitle, _countof(szTitle));
+	if(nLen == 0 || nLen >= _countof(szTitle))
+		return FALSE;
+
+	CString csTitle(szTitle);
+
+	// Remove trailing " - File Explorer" (Win10/11)
+	int pos = csTitle.ReverseFind(_T('-'));
+	if(pos > 0 && csTitle.Right(16).CompareNoCase(_T(" - File Explorer")) == 0)
+		csTitle = csTitle.Left(pos).TrimRight();
+
+	// Remove trailing " - (read-only)"
+	pos = csTitle.ReverseFind(_T('-'));
+	if(pos > 0 && csTitle.Right(13).CompareNoCase(_T(" - (read-only)")) == 0)
+		csTitle = csTitle.Left(pos).TrimRight();
+
+	// Remove trailing slash/backslash if present
+	csTitle = csTitle.TrimRight(_T("\\/"));
+	if(csTitle.GetLength() == 0)
+		return FALSE;
+
+	// Check if it looks like a local path (starts with drive letter)
+	if(csTitle.GetLength() >= 3 && csTitle[1] == _T(':'))
+	{
+		DWORD attr = GetFileAttributes(csTitle);
+		if(attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY))
+		{
+			csDir = csTitle;
+			return TRUE;
+		}
+		return FALSE;
+	}
+
+	// Check UNC path
+	if(csTitle.GetLength() >= 2 && csTitle[0] == _T('\\\'))
+	{
+		DWORD attr = GetFileAttributes(csTitle);
+		if(attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY))
+		{
+			csDir = csTitle;
+			return TRUE;
+		}
+		return FALSE;
+	}
+
+	return FALSE;
+}
+
 
 CString TopLevelWindowText(DWORD pid)
 {

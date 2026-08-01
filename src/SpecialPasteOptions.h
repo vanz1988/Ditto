@@ -33,6 +33,7 @@ public:
 	bool m_pasteAsciiOnly;
 	bool m_pasteGuid;
 	bool m_pasteAsImage;
+	CString m_csTargetDir;  // target directory detected from foreground Explorer (empty = fallback to ReceivedFiles)
 
 	bool LimitFormatsToText() 
 	{ 

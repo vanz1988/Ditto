@@ -30,6 +30,7 @@ CSpecialPasteOptions::CSpecialPasteOptions()
 	m_pasteAsciiOnly = false;
 	m_pasteGuid = false;
 	m_pasteAsImage = false;
+	m_csTargetDir = _T("");
 }
 
 CSpecialPasteOptions::~CSpecialPasteOptions()

@@ -686,6 +686,19 @@ void CMainFrame::PasteOrShowGroup(int dbId, BOOL updateClipTime, BOOL activeTarg
 			{
 				paste.m_bSendPaste = sendPaste ? true : false;
 			}
+
+			// Detect target directory from foreground Explorer before calling DoPaste
+			CString csTargetDir;
+			if(GetTargetDirFromExplorer(csTargetDir))
+			{
+				paste.m_pasteOptions.m_csTargetDir = csTargetDir;
+				Log(StrF(_T("PasteOrShowGroup: target dir detected: %s"), csTargetDir));
+			}
+			else
+			{
+				Log(_T("PasteOrShowGroup: no target dir detected, will use ReceivedFiles fallback"));
+			}
+
 			paste.DoPaste();
 			theApp.OnPasteCompleted();
 

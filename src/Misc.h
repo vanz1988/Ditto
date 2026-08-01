@@ -97,6 +97,9 @@ CString GetWndText( HWND hWnd );
 // returns true if the given window is owned by this process
 bool IsAppWnd( HWND hWnd );
 
+// Returns the directory path of the foreground File Explorer window, if one exists.
+BOOL GetTargetDirFromExplorer(CString &csDir);
+
 // Global Memory Helper Functions
 BOOL IsValid(HGLOBAL hGlobal);
 void CopyToGlobalHP(HGLOBAL hDest, LPVOID pBuf, SIZE_T ulBufLen);
