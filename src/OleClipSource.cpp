@@ -1332,6 +1332,7 @@ BOOL COleClipSource::OnRenderGlobalData(LPFORMATETC lpFormatEtc, HGLOBAL* phGlob
 		return FALSE;
 	}
 	bInHere = true;
+	Log(StrF(_T("OnRenderGlobalData: ENTER format=%d remoteTransferred=%d"), lpFormatEtc->cfFormat, m_bRemoteTransferred));
 
 	HGLOBAL hData = NULL;
 
@@ -1339,6 +1340,7 @@ BOOL COleClipSource::OnRenderGlobalData(LPFORMATETC lpFormatEtc, HGLOBAL* phGlob
 
 	if(pFind)
 	{
+		Log(StrF(_T("OnRenderGlobalData: cache HIT pFind=%p hgData=%p"), pFind, pFind->m_hgData));
 		if(pFind->m_hgData)
 		{
 			hData = NewGlobalH(pFind->m_hgData, GlobalSize(pFind->m_hgData));
@@ -1353,7 +1355,7 @@ BOOL COleClipSource::OnRenderGlobalData(LPFORMATETC lpFormatEtc, HGLOBAL* phGlob
 			return false;
 		}
 
-		LogSendRecieveInfo("Delayed Render, getting data from remote machine");
+		LogSendRecieveInfo(StrF(_T("Delayed Render format=%d remoteTransferred=%d"), lpFormatEtc->cfFormat, m_bRemoteTransferred));
 
 		CClip clip;
 
@@ -1364,6 +1366,7 @@ BOOL COleClipSource::OnRenderGlobalData(LPFORMATETC lpFormatEtc, HGLOBAL* phGlob
 			CClipFormat *pDittoDelayCF_HDROP = clip.m_Formats.FindFormat(theApp.m_RemoteCF_HDROP);
 			CClipFormat *pCF_HDROP = clip.m_Formats.FindFormat(CF_HDROP);
 
+				Log(StrF(_T("OnRenderGlobalData: UDP path entered format=%d remoteTransferred=%d"), lpFormatEtc->cfFormat, m_bRemoteTransferred));
 			if(pDittoDelayCF_HDROP && pCF_HDROP)
 			{
 				CDittoCF_HDROP *pData = (CDittoCF_HDROP*)GlobalLock(pDittoDelayCF_HDROP->m_hgData);
@@ -1407,6 +1410,7 @@ BOOL COleClipSource::OnRenderGlobalData(LPFORMATETC lpFormatEtc, HGLOBAL* phGlob
 					// doesn't also try a native paste (which causes duplicate file dialog).
 					if (csDestDir.GetLength() > 0 && hData != NULL)
 					{
+						Log(_T("OnRenderGlobalData: setting remoteTransferred=TRUE"));
 						m_bRemoteTransferred = true;
 						Log(_T("OnRenderGlobalData: UDP done, skipping CF_HDROP to avoid duplicate paste"));
 						hData = NULL;
@@ -1415,11 +1419,13 @@ BOOL COleClipSource::OnRenderGlobalData(LPFORMATETC lpFormatEtc, HGLOBAL* phGlob
 			}
 				else
 			{
+				Log(_T("OnRenderGlobalData: skip (remoteTransferred)")); 
 				if (m_bRemoteTransferred)
 				{
 					bInHere = false;
 					return FALSE;
 				}
+				Log(StrF(_T("OnRenderGlobalData: calling m_ClipIDs.Render format=%d"), lpFormatEtc->cfFormat));
 				hData = m_ClipIDs.Render(lpFormatEtc->cfFormat);
 
 				if (m_convertToHDROPOnDelayRender &&
