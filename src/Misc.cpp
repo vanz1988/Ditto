@@ -284,7 +284,7 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 
 	long hwnd = 0;
 	IDispatch *pDisp = NULL;
-	hr = pSW->FindWindowSW(&vLoc, &vEmpty, SWC_DESKTOP, &hwnd, SWFO_NEEDDISPATCH, &pDisp);
+	hr = pSW->FindWindowSW(&vLoc, &vEmpty, 1, &hwnd, SWFO_NEEDDISPATCH, &pDisp);  // 1 = SWC_EXPLORER
 	pSW->Release();
 	if(FAILED(hr) || pDisp == NULL)
 	{
