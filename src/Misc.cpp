@@ -308,7 +308,7 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 	}
 
 	// Check UNC path
-	if(csTitle.GetLength() >= 2 && csTitle[0] == _T('\\\'))
+	if(csTitle.GetLength() >= 2 && csTitle[0] == _T('\\'))
 	{
 		DWORD attr = GetFileAttributes(csTitle);
 		if(attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY))
