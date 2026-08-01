@@ -12,6 +12,7 @@
 #include <regex>
 #include <vector>
 #include <shlobj.h>
+#import "shdocvw.dll" raw_interfaces_only raw_native_types no_namespace named_guids
 
 CString GetIPAddress()
 {
@@ -261,11 +262,14 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 {
 	csDir.Empty();
 
-	IUnknown *pUnk = NULL;
+	HRESULT hr;
+
+	// Import IWebBrowser2 from shdocvw.dll (for get_LocationURL)
+		IUnknown *pUnk = NULL;
 	IDispatch *pDisp = NULL;
 	IShellWindows *pSW = NULL;
 
-	HRESULT hr = CoCreateInstance(CLSID_ShellWindows, NULL, CLSCTX_ALL, IID_IUnknown, (LPVOID*)&pUnk);
+	hr = CoCreateInstance(CLSID_ShellWindows, NULL, CLSCTX_ALL, IID_IUnknown, (LPVOID*)&pUnk);
 	if(FAILED(hr)) return FALSE;
 
 	hr = pUnk->QueryInterface(IID_IDispatch, (LPVOID*)&pDisp);
@@ -288,47 +292,73 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 		IDispatch *pWin = NULL;
 		if(pSW->Item(CComVariant(i), &pWin) != S_OK) continue;
 
-		IServiceProvider *pSP = NULL;
-		if(pWin->QueryInterface(IID_IServiceProvider, (LPVOID*)&pSP) != S_OK)
+		IWebBrowser2 *pBrowser = NULL;
+		if(pWin->QueryInterface(IID_IWebBrowser2, (LPVOID*)&pBrowser) != S_OK)
 		{
 			pWin->Release();
 			continue;
-		}
-
-		IFolderView *pFVS = NULL;
-		if(pSP->QueryService(SID_STopLevelBrowser, IID_IFolderView, (LPVOID*)&pFVS) != S_OK)
-		{
-			pSP->Release();
-			pWin->Release();
-			continue;
-		}
-		pSP->Release();
-
-		if(pFVS)
-		{
-			ITEMIDLIST *pidlDir = NULL;
-			if(pFVS->GetFolder(IID_PPV_ARGS(&pidlDir)) == S_OK && pidlDir)
-			{
-				TCHAR szPath[MAX_PATH];
-				if(SHGetPathFromIDList(pidlDir, szPath))
-				{
-					DWORD attrs = GetFileAttributes(szPath);
-					if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
-					{
-						csDir = szPath;
-						Log(StrF(_T("GetTargetDir: resolved dir=%s (IShellWindows)"), csDir));
-						CoTaskMemFree(pidlDir);
-						pFVS->Release();
-						pWin->Release();
-						pSW->Release();
-						return TRUE;
-					}
-				}
-				CoTaskMemFree(pidlDir);
-			}
-			pFVS->Release();
 		}
 		pWin->Release();
+
+		// Get the window handle to check if it's a file Explorer
+		HWND hWnd = NULL;
+		if(pBrowser->get_HWND((LONG_PTR*)&hWnd) != S_OK)
+		{
+			pBrowser->Release();
+			continue;
+		}
+
+		TCHAR szClass[256];
+		DWORD nLen = GetClassName(hWnd, szClass, _countof(szClass));
+		if(nLen > 0 && nLen < _countof(szClass) &&
+		   (_tcsicmp(szClass, _T("CabinetWClass")) != 0 &&
+			_tcsicmp(szClass, _T("ExploreWClass")) != 0))
+		{
+			pBrowser->Release();
+			continue;
+		}
+
+		// Get the LocationURL
+		BSTR bstrURL = NULL;
+		if(pBrowser->get_LocationURL(&bstrURL) != S_OK)
+		{
+			pBrowser->Release();
+			continue;
+		}
+		pBrowser->Release();
+
+		if(bstrURL)
+		{
+			CString csURL(bstrURL);
+			SysFreeString(bstrURL);
+
+			// Parse "file:///C:\path\to\folder" -> "C:\path\to\folder"
+			if(csURL.Find(_T("file:///")) == 0)
+			{
+				csURL = csURL.Mid(8);
+			}
+			else if(csURL.Find(_T("file://")) == 0)
+			{
+				csURL = csURL.Mid(7);
+			}
+
+			// Remove percent-encoded characters
+			CString csPath;
+			csPath = csURL;
+
+			DWORD attrs = GetFileAttributes(csPath);
+			if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
+			{
+				csDir = csPath;
+				Log(StrF(_T("GetTargetDir: resolved dir=%s (IWebBrowser2)"), csDir));
+				pSW->Release();
+				return TRUE;
+			}
+			else
+			{
+				Log(StrF(_T("GetTargetDir: file:// URL not a valid dir: %s"), csPath));
+			}
+		}
 	}
 
 	pSW->Release();
