@@ -23,7 +23,7 @@ CFileRecieve::~CFileRecieve()
 {
 }
 
-long CFileRecieve::RecieveFiles(SOCKET sock, CString csIP, CFileTransferProgressDlg *pProgress)
+long CFileRecieve::RecieveFiles(SOCKET sock, CString csIP, CFileTransferProgressDlg *pProgress, LPCTSTR csDestDir)
 {
 	CSendInfo Info;
 	BOOL bBreak = false;
@@ -34,6 +34,7 @@ long CFileRecieve::RecieveFiles(SOCKET sock, CString csIP, CFileTransferProgress
 
 	m_pProgress = pProgress;
 	m_csReceivingFromIP = csIP;
+	m_csDestDir = csDestDir ? csDestDir : _T("");
 	m_Sock.SetSocket(sock);
 	m_Sock.SetProgressBar(pProgress);
 
@@ -75,7 +76,7 @@ long CFileRecieve::RecieveFiles(SOCKET sock, CString csIP, CFileTransferProgress
 
 			LogSendRecieveInfo(StrF(_T("START of receiving the file %s, size: %d, File %d of %d"), csFileName, lFileSize, nFilesRecieved, nNumFiles));
 
-			long lRecieveRet = RecieveFileData(lFileSize, csFileName, lastMd5);
+			long lRecieveRet = RecieveFileData(lFileSize, csFileName, lastMd5, m_csDestDir);
 			if(lRecieveRet == USER_CANCELED)
 			{
 				lRet = USER_CANCELED;
@@ -162,17 +163,26 @@ long CFileRecieve::RecieveFiles(SOCKET sock, CString csIP, CFileTransferProgress
 	return lRet;
 }
 
-long CFileRecieve::RecieveFileData(ULONG lFileSize, CString csFileName, CString &md5String)
+long CFileRecieve::RecieveFileData(ULONG lFileSize, CString csFileName, CString &md5String, LPCTSTR csDestDir)
 {
-	CString csFile = CGetSetOptions::GetPath(PATH_REMOTE_FILES);
-	CreateDirectory(csFile, NULL);
+	CString csFile;
+	CString csFinalDir;
 
-	csFile += nsPath::ReplaceInvalid(m_csReceivingFromIP) + "\\";
+	if(csDestDir && csDestDir[0] != 0)
+	{
+		csFile = csDestDir;
+		csFinalDir = csFile;
+	}
+	else
+	{
+		csFile = CGetSetOptions::GetPath(PATH_REMOTE_FILES);
+		csFinalDir = csFile + nsPath::ReplaceInvalid(m_csReceivingFromIP) + "\\";
+	}
 
-	CreateDirectory(csFile, NULL);
-	
+	CreateDirectory(csFinalDir, NULL);
+
 	nsPath::CPath path(csFileName);
-	csFile += path.GetName();
+	csFile = csFinalDir + path.GetName();
 
 	CFile File;
 	CFileException ex;

@@ -51,7 +51,7 @@ public:
 	BOOL OpenConnection(const TCHAR* servername);
 	BOOL CloseConnection();
 
-	HGLOBAL RequestCopiedFiles(CClipFormat &HDropFormat, CString csIP, CString csComputerName);
+	HGLOBAL RequestCopiedFiles(CClipFormat &HDropFormat, CString csIP, CString csComputerName, LPCTSTR csDestDir = NULL);
 
 protected:
 	SOCKET m_Connection;

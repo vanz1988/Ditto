@@ -301,7 +301,7 @@ BOOL CClient::SendClipFormat(CClipFormat* pCF)
 	return bRet;
 }
 
-HGLOBAL CClient::RequestCopiedFiles(CClipFormat &HDropFormat, CString csIP, CString csComputerName)
+HGLOBAL CClient::RequestCopiedFiles(CClipFormat &HDropFormat, CString csIP, CString csComputerName, LPCTSTR csDestDir)
 {
 	CSendInfo Info;
 	bool bBreak = false;
@@ -358,7 +358,7 @@ HGLOBAL CClient::RequestCopiedFiles(CClipFormat &HDropFormat, CString csIP, CStr
 			break;
 
 		CFileRecieve Recieve;
-		long lRet = Recieve.RecieveFiles(m_Connection, csIP, pProgress);
+		long lRet = Recieve.RecieveFiles(m_Connection, csIP, pProgress, csDestDir);
 		if(lRet == TRUE)
 		{
 			hReturn = Recieve.CreateCF_HDROPBuffer();
