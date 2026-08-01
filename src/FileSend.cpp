@@ -116,6 +116,7 @@ BOOL CFileSend::SendClientFiles(SOCKET sock, CClipList *pClipList)
 void CFileSend::EnumerateDirectory(CString csDir, LPCTSTR csPrefix, CStringArray &rDirs, CStringArray &rAbsFiles, CStringArray &rRelFiles)
 {
 	CString searchPath = csDir + _T("\\*");
+	WIN32_FIND_DATA FindData;
 	HANDLE hFind = ::FindFirstFile(searchPath, &FindData);
 	if(hFind == INVALID_HANDLE_VALUE)
 		return;
