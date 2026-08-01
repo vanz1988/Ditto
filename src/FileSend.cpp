@@ -71,7 +71,7 @@ BOOL CFileSend::SendClientFiles(SOCKET sock, CClipList *pClipList)
 				else
 				{
 					CopyFiles.Add(file);
-					CopyRelFiles.Add(file);
+					CopyRelFiles.Add(nsPath::CPath(file).GetName());
 				}
 			}
 		}
