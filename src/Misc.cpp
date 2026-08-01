@@ -309,6 +309,31 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 		if(FAILED(hr) || pSB == NULL)
 			continue;
 
+		// Match against foreground window (the Explorer user is actually using)
+		HWND hFG = ::GetForegroundWindow();
+		if(hFG == NULL)
+		{
+			pSB->Release();
+			continue;
+		}
+
+		HWND hBrowserWnd = NULL;
+		hr = pSB->GetWindow(&hBrowserWnd);
+		if(FAILED(hr) || hBrowserWnd == NULL)
+		{
+			pSB->Release();
+			continue;
+		}
+
+		if(hBrowserWnd != hFG)
+		{
+			TCHAR szFGClass[256];
+			GetClassName(hFG, szFGClass, _countof(szFGClass));
+			Log(StrF(_T("GetTargetDir: browser hwnd=%p fg hwnd=%p class=%s skip"), hBrowserWnd, hFG, szFGClass));
+			pSB->Release();
+			continue;
+		}
+
 		IShellView *pSV = NULL;
 		hr = pSB->QueryActiveShellView(&pSV);
 		pSB->Release();
@@ -352,7 +377,7 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 		}
 		else
 		{
-			Log(StrF(_T("GetTargetDir: SHGetPathFromIDList failed hr=0x%08X"), hr));
+			Log(StrF(_T("GetTargetDir: SHGetPathFromIDList returned FALSE for PIDL")));
 		}
 		CoTaskMemFree(pidlFolder);
 	}

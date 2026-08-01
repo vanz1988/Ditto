@@ -172,6 +172,7 @@ long CFileRecieve::RecieveFileData(ULONG lFileSize, CString csFileName, CString 
 	{
 		csFile = csDestDir;
 		csFinalDir = csFile;
+		csFinalDir += _T('\\');
 	}
 	else
 	{
