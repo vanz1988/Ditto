@@ -55,64 +55,48 @@ BOOL CFileSend::SendClientFiles(SOCKET sock, CClipList *pClipList)
 		int nNumItems = DragQueryFile(drop, -1, NULL, 0);
 		TCHAR file[MAX_PATH];
 
-		CString csRoot;
-		BOOL bHasDir = FALSE;
-
 		for(int nItem = 0; nItem < nNumItems; nItem++)
 		{
 			if(DragQueryFile(drop, nItem, file, sizeof(file)) > 0)
-            {
-                if(PathIsDirectory(file))
-                {
-                    csRoot = file;
-                    bHasDir = TRUE;
-                    break;
-                }
-            }
+			{
+				if(PathIsDirectory(file))
+				{
+					CString csRootName = nsPath::CPath(file).GetName();
+					CopyDirs.Add(csRootName);
+					EnumerateDirectory(file, csRootName, CopyDirs, CopyFiles, CopyRelFiles);
+				}
+				else
+				{
+					CopyFiles.Add(file);
+					CopyRelFiles.Add(file);
+				}
+			}
 		}
 
-        if(bHasDir)
-        {
-            CString csRootName = nsPath::CPath(csRoot).GetName();
-            CopyDirs.Add(csRootName);
-            EnumerateDirectory(csRoot, csRootName, CopyDirs, CopyFiles, CopyRelFiles);
-        }
-        else
-        {
-            for(int nItem = 0; nItem < nNumItems; nItem++)
-            {
-                if(DragQueryFile(drop, nItem, file, sizeof(file)) > 0)
-                {
-                    CopyFiles.Add(file);
-                    CopyRelFiles.Add(file);
-                }
-            }
-        }
+		GlobalUnlock(pFormat->m_hgData);
+	}
 
-        GlobalUnlock(pFormat->m_hgData);
-    }
+	Info.m_lParameter1 = (long)(CopyFiles.GetSize() + CopyDirs.GetSize());
+	if(Info.m_lParameter1 > 0)
+	{
+		if(m_Send.SendCSendData(Info, MyEnums::START))
+		{
+			for(int nDir = 0; nDir < CopyDirs.GetSize(); nDir++)
+			{
+				SendDir(CopyDirs[nDir]);
+			}
 
-    Info.m_lParameter1 = (long)(CopyFiles.GetSize() + CopyDirs.GetSize());
-    if(Info.m_lParameter1 > 0)
-    {
-        if(m_Send.SendCSendData(Info, MyEnums::START))
-        {
-            for(int nDir = 0; nDir < CopyDirs.GetSize(); nDir++)
-            {
-                SendDir(CopyDirs[nDir]);
-            }
+			for(int nFile = 0; nFile < CopyFiles.GetSize(); nFile++)
+			{
+				SendFile(CopyFiles[nFile], CopyRelFiles[nFile]);
+			}
+		}
+	}
 
-            for(int nFile = 0; nFile < CopyFiles.GetSize(); nFile++)
-            {
-                SendFile(CopyFiles[nFile], CopyRelFiles[nFile]);
-            }
-        }
-    }
-    
-    if(m_Send.SendCSendData(Info, MyEnums::END))
-            bRet = TRUE;
-    
-    return bRet;
+	if(m_Send.SendCSendData(Info, MyEnums::END))
+		bRet = TRUE;
+
+	return bRet;
 }
 
 void CFileSend::EnumerateDirectory(CString csDir, LPCTSTR csPrefix, CStringArray &rDirs, CStringArray &rAbsFiles, CStringArray &rRelFiles)
