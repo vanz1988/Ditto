@@ -29,6 +29,7 @@ COleClipSource::COleClipSource()
 {
 	m_bLoadedFormats = false;
 	m_convertToHDROPOnDelayRender = false;
+	m_bRemoteTransferred = false;
 }
 
 COleClipSource::~COleClipSource()
@@ -1406,6 +1407,7 @@ BOOL COleClipSource::OnRenderGlobalData(LPFORMATETC lpFormatEtc, HGLOBAL* phGlob
 					// doesn't also try a native paste (which causes duplicate file dialog).
 					if (csDestDir.GetLength() > 0 && hData != NULL)
 					{
+						m_bRemoteTransferred = true;
 						Log(_T("OnRenderGlobalData: UDP done, skipping CF_HDROP to avoid duplicate paste"));
 						hData = NULL;
 					}
@@ -1413,6 +1415,11 @@ BOOL COleClipSource::OnRenderGlobalData(LPFORMATETC lpFormatEtc, HGLOBAL* phGlob
 			}
 				else
 			{
+				if (m_bRemoteTransferred)
+				{
+					bInHere = false;
+					return FALSE;
+				}
 				hData = m_ClipIDs.Render(lpFormatEtc->cfFormat);
 
 				if (m_convertToHDROPOnDelayRender &&

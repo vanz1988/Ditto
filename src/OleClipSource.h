@@ -63,4 +63,5 @@ protected:
 	void AsciiOnly(CClip& clip);
 	void PutGuidOntoClipboard(CClip& clip);
 	void PasteAsImage(CClip& clip);
+	bool m_bRemoteTransferred;
 };
