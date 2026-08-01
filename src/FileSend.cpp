@@ -73,7 +73,9 @@ BOOL CFileSend::SendClientFiles(SOCKET sock, CClipList *pClipList)
 
         if(bHasDir)
         {
-            EnumerateDirectory(csRoot, _T(""), CopyDirs, CopyFiles, CopyRelFiles);
+            CString csRootName = nsPath::CPath(csRoot).GetName();
+            CopyDirs.Add(csRootName);
+            EnumerateDirectory(csRoot, csRootName, CopyDirs, CopyFiles, CopyRelFiles);
         }
         else
         {
