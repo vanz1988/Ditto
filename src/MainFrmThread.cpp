@@ -219,35 +219,44 @@ void CMainFrmThread::OnSaveRemoteClips()
 
 	if(pLastClip && (pLastClip->m_param1 & REMOTE_CLIP_ADD_TO_CLIPBOARD))
 	{
-		// Skip auto-paste for remote file clips: they trigger OnRenderGlobalData
-		// immediately, downloading to ReceivedFiles before user chooses where to paste.
-		// Keep them only in the DB; user will trigger the paste via hotkey.
+        int nFormats = (int)pLastClip->m_Formats.GetSize();
+        Log(StrF(_T("OnSaveRemoteClips: clip has %d formats, checking for REMOTE_CF_HDROP"), nFormats));
+
 		bool bHasRemoteHDROP = FALSE;
-		for(int i = 0; i < (int)pLastClip->m_Formats.GetSize(); i++)
+		for(int i = 0; i < nFormats; i++)
         {
-            if(pLastClip->m_Formats.ElementAt(i).m_cfType == theApp.m_RemoteCF_HDROP)
+            CLIPFORMAT cfType = pLastClip->m_Formats.ElementAt(i).m_cfType;
+            CString csFmtName;
+            GetClipboardFormatName(cfType, csFmtName.GetBuffer(256), 256);
+            csFmtName.ReleaseBuffer();
+            Log(StrF(_T("OnSaveRemoteClips: format[%d] cfType=%d name=%s"), i, cfType, csFmtName));
+
+            if(cfType == theApp.m_RemoteCF_HDROP)
             {
                 bHasRemoteHDROP = TRUE;
                 break;
             }
         }
 
+        Log(StrF(_T("OnSaveRemoteClips: bHasRemoteHDROP=%d, will %s WM_LOAD_ClIP_ON_CLIPBOARD"),
+            bHasRemoteHDROP, bHasRemoteHDROP ? _T("SKIP") : _T("SEND")));
+
         if(!bHasRemoteHDROP)
         {
-            LogSendRecieveInfo("---------OnSaveRemoteClips - Before Posting msg to main thread to set clipboard");
+            Log(_T("OnSaveRemoteClips: Sending WM_LOAD_ClIP_ON_CLIPBOARD (auto-paste)"));
 
             //set the clipboard on the main thread, i was having a problem with setting the clipboard on a thread
             //guess it needs to be set on the main thread
             //main window will clear this memory
             PostMessage(theApp.m_MainhWnd, WM_LOAD_ClIP_ON_CLIPBOARD, (LPARAM)pLastClip, 0);
 
-            LogSendRecieveInfo("---------OnSaveRemoteClips - After Posting msg to main thread to set clipboard");
+            Log(_T("OnSaveRemoteClips: After Posting msg to main thread to set clipboard"));
 
             pLocalClips->RemoveTail();
         }
         else
         {
-            LogSendRecieveInfo("---------OnSaveRemoteClips - Skipped auto-paste for remote file clip");
+            Log(_T("OnSaveRemoteClips: SKIPPED auto-paste for remote file clip"));
         }
 	}	
 

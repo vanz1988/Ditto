@@ -1465,6 +1465,7 @@ BOOL COleClipSource::OnRenderGlobalData(LPFORMATETC lpFormatEtc, HGLOBAL* phGlob
 					}
 
 					CClient cl;
+						Log(StrF(_T("OnRenderGlobalData: requesting file from remote %s"), ipPort));
 					hData = cl.RequestCopiedFiles(*pCF_HDROP, ipPort, namePort, csDestDir);
 				}
 			}
