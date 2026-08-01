@@ -12,7 +12,6 @@
 #include <regex>
 #include <vector>
 #include <shlobj.h>
-#include <shdocvw.h>
 
 CString GetIPAddress()
 {
@@ -262,106 +261,62 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 {
 	csDir.Empty();
 
-	HRESULT hr;
+	HWND hWnd = ::GetForegroundWindow();
+	if(hWnd == NULL)
+		return FALSE;
 
-
-	IUnknown *pUnk = NULL;
-	IDispatch *pDisp = NULL;
-	IShellWindows *pSW = NULL;
-
-	hr = CoCreateInstance(CLSID_ShellWindows, NULL, CLSCTX_ALL, IID_IUnknown, (LPVOID*)&pUnk);
-	if(FAILED(hr)) return FALSE;
-
-	hr = pUnk->QueryInterface(IID_IDispatch, (LPVOID*)&pDisp);
-	pUnk->Release();
-	if(FAILED(hr)) return FALSE;
-
-	hr = pDisp->QueryInterface(IID_IShellWindows, (LPVOID*)&pSW);
-	pDisp->Release();
-	if(FAILED(hr)) return FALSE;
-
-	long nCount;
-	if(pSW->get_Count(&nCount) != S_OK)
+	TCHAR szClass[256];
+	DWORD nLen = ::GetClassName(hWnd, szClass, _countof(szClass));
+	if(nLen > 0 && nLen < _countof(szClass) &&
+	   (_tcsicmp(szClass, _T("CabinetWClass")) != 0 &&
+		_tcsicmp(szClass, _T("ExploreWClass")) != 0))
 	{
-		pSW->Release();
 		return FALSE;
 	}
 
-	for(long i = 0; i < nCount; i++)
+	typedef HRESULT(__stdcall *AOFW_t)(HWND, DWORD_PTR, REFIID, void**);
+	HMODULE hOleacc = ::LoadLibrary(_T("oleacc.dll"));
+	if(hOleacc == NULL)
+		return FALSE;
+
+	AOFW_t fn = (AOFW_t)::GetProcAddress(hOleacc, "AccessibleObjectFromWindow");
+	if(fn == NULL)
 	{
-		IDispatch *pWin = NULL;
-		if(pSW->Item(CComVariant(i), &pWin) != S_OK) continue;
-
-		IWebBrowser2 *pBrowser = NULL;
-		if(pWin->QueryInterface(IID_IWebBrowser2, (LPVOID*)&pBrowser) != S_OK)
-		{
-			pWin->Release();
-			continue;
-		}
-		pWin->Release();
-
-		// Get the window handle to check if it's a file Explorer
-		HWND hWnd = NULL;
-		if(pBrowser->get_HWND((LONG_PTR*)&hWnd) != S_OK)
-		{
-			pBrowser->Release();
-			continue;
-		}
-
-		TCHAR szClass[256];
-		DWORD nLen = GetClassName(hWnd, szClass, _countof(szClass));
-		if(nLen > 0 && nLen < _countof(szClass) &&
-		   (_tcsicmp(szClass, _T("CabinetWClass")) != 0 &&
-			_tcsicmp(szClass, _T("ExploreWClass")) != 0))
-		{
-			pBrowser->Release();
-			continue;
-		}
-
-		// Get the LocationURL
-		BSTR bstrURL = NULL;
-		if(pBrowser->get_LocationURL(&bstrURL) != S_OK)
-		{
-			pBrowser->Release();
-			continue;
-		}
-		pBrowser->Release();
-
-		if(bstrURL)
-		{
-			CString csURL(bstrURL);
-			SysFreeString(bstrURL);
-
-			// Parse "file:///C:\path\to\folder" -> "C:\path\to\folder"
-			if(csURL.Find(_T("file:///")) == 0)
-			{
-				csURL = csURL.Mid(8);
-			}
-			else if(csURL.Find(_T("file://")) == 0)
-			{
-				csURL = csURL.Mid(7);
-			}
-
-			// Remove percent-encoded characters
-			CString csPath;
-			csPath = csURL;
-
-			DWORD attrs = GetFileAttributes(csPath);
-			if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
-			{
-				csDir = csPath;
-				Log(StrF(_T("GetTargetDir: resolved dir=%s (IWebBrowser2)"), csDir));
-				pSW->Release();
-				return TRUE;
-			}
-			else
-			{
-				Log(StrF(_T("GetTargetDir: file:// URL not a valid dir: %s"), csPath));
-			}
-		}
+		::FreeLibrary(hOleacc);
+		return FALSE;
 	}
 
-	pSW->Release();
+	IWebBrowser2 *pBrowser = NULL;
+	HRESULT hr = fn(hWnd, (DWORD_PTR)-1, IID_IWebBrowser2, (void**)&pBrowser);
+	::FreeLibrary(hOleacc);
+
+	if(FAILED(hr) || pBrowser == NULL)
+		return FALSE;
+
+	BSTR bstrURL = NULL;
+	hr = pBrowser->get_LocationURL(&bstrURL);
+	pBrowser->Release();
+
+	if(FAILED(hr) || bstrURL == NULL)
+		return FALSE;
+
+	CString csURL(bstrURL);
+	SysFreeString(bstrURL);
+
+	if(csURL.Find(_T("file:///")) == 0)
+		csURL = csURL.Mid(8);
+	else if(csURL.Find(_T("file://")) == 0)
+		csURL = csURL.Mid(7);
+
+	DWORD attrs = GetFileAttributes(csURL);
+	if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
+	{
+		csDir = csURL;
+		Log(StrF(_T("GetTargetDir: resolved dir=%s (AccessibleObjectFromWindow)"), csDir));
+		return TRUE;
+	}
+
+	Log(StrF(_T("GetTargetDir: file:// URL not a valid dir: %s"), csURL));
 	return FALSE;
 }
 CString TopLevelWindowText(DWORD pid)
