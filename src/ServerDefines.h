@@ -6,7 +6,7 @@
 class MyEnums
 {
 public:
-	enum eSendType{START, DATA, DATA_START, DATA_END, END, EXIT, REQUEST_FILES};
+	enum eSendType{START, DATA, DATA_START, DATA_DIR, DATA_END, END, EXIT, REQUEST_FILES};
 };
 
 class CSendInfo

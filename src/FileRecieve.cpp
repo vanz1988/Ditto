@@ -7,6 +7,8 @@
 #include "UnicodeMacros.h"
 #include "Md5.h"
 
+#include <shlwapi.h>
+
 
 #ifdef _DEBUG
 #undef THIS_FILE
@@ -53,6 +55,19 @@ long CFileRecieve::RecieveFiles(SOCKET sock, CString csIP, CFileTransferProgress
 			}
 			LogSendRecieveInfo(StrF(_T("Start receiving files File Count: %d"), nNumFiles));
 			break;
+		case MyEnums::DATA_DIR:
+		{
+			CString csRelPath = CTextConvert::Utf8ToUnicode(Info.m_cDesc);
+			CString csFullPath = m_csDestDir;
+            if(csFullPath.GetLength() > 0)
+			{
+                csFullPath += _T("\\");
+			}
+			csFullPath += csRelPath;
+            CreateDirectory(csFullPath, NULL);
+            LogSendRecieveInfo(StrF(_T("Created directory: %s"), csFullPath));
+			break;
+		}
 		case MyEnums::DATA_START:
 		{
 			CString csFileName = CTextConvert::Utf8ToUnicode(Info.m_cDesc);
@@ -184,7 +199,12 @@ long CFileRecieve::RecieveFileData(ULONG lFileSize, CString csFileName, CString 
 	CreateDirectory(csFinalDir, NULL);
 
 	nsPath::CPath path(csFileName);
-	csFile = csFinalDir + path.GetName();
+	csFile = csFinalDir + csFileName;
+
+    // Create parent directories for the file
+	CString csParentDir = csFile;
+	PathRemoveFileSpec(csParentDir.GetBuffer(MAX_PATH));
+	CreateDirectory(csParentDir, NULL);
 
 	CFile File;
 	CFileException ex;

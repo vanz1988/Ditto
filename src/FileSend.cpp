@@ -45,44 +45,122 @@ BOOL CFileSend::SendClientFiles(SOCKET sock, CClipList *pClipList)
 	BOOL bRet = FALSE;
 
 	CStringArray CopyFiles;
+	CStringArray CopyRelFiles;
+	CStringArray CopyDirs;
 
 	CClipFormat *pFormat = GetCF_HDROP_Data(pClipList);
 	if(pFormat)
 	{
 		HDROP drop = (HDROP)GlobalLock(pFormat->m_hgData);
- 		int nNumFiles = DragQueryFile(drop, -1, NULL, 0);
- 		TCHAR file[MAX_PATH];
+		int nNumItems = DragQueryFile(drop, -1, NULL, 0);
+		TCHAR file[MAX_PATH];
 
- 		for(int nFile = 0; nFile < nNumFiles; nFile++)
- 		{
- 			if(DragQueryFile(drop, nFile, file, sizeof(file)) > 0)
- 			{
-				if(PathIsDirectory(file) == FALSE)
-				{
-					CopyFiles.Add(file);
-				}
- 			}
- 		}
+		CString csRoot;
+		BOOL bHasDir = FALSE;
 
-		GlobalUnlock(pFormat->m_hgData);
-	}
-
-	Info.m_lParameter1 = (long)CopyFiles.GetSize();
-	if(Info.m_lParameter1 > 0)
-	{
-		if(m_Send.SendCSendData(Info, MyEnums::START))
+		for(int nItem = 0; nItem < nNumItems; nItem++)
 		{
-			for(int nFile = 0; nFile < Info.m_lParameter1; nFile++)
-			{
-				SendFile(CopyFiles[nFile]);
-			}
+			if(DragQueryFile(drop, nItem, file, sizeof(file)) > 0)
+            {
+                if(PathIsDirectory(file))
+                {
+                    csRoot = file;
+                    bHasDir = TRUE;
+                    break;
+                }
+            }
 		}
+
+        if(bHasDir)
+        {
+            EnumerateDirectory(csRoot, _T(""), CopyDirs, CopyFiles, CopyRelFiles);
+        }
+        else
+        {
+            for(int nItem = 0; nItem < nNumItems; nItem++)
+            {
+                if(DragQueryFile(drop, nItem, file, sizeof(file)) > 0)
+                {
+                    CopyFiles.Add(file);
+                    CopyRelFiles.Add(file);
+                }
+            }
+        }
+
+        GlobalUnlock(pFormat->m_hgData);
+    }
+
+    Info.m_lParameter1 = (long)(CopyFiles.GetSize() + CopyDirs.GetSize());
+    if(Info.m_lParameter1 > 0)
+    {
+        if(m_Send.SendCSendData(Info, MyEnums::START))
+        {
+            for(int nDir = 0; nDir < CopyDirs.GetSize(); nDir++)
+            {
+                SendDir(CopyDirs[nDir]);
+            }
+
+            for(int nFile = 0; nFile < CopyFiles.GetSize(); nFile++)
+            {
+                SendFile(CopyFiles[nFile], CopyRelFiles[nFile]);
+            }
+        }
+    }
+    
+    if(m_Send.SendCSendData(Info, MyEnums::END))
+            bRet = TRUE;
+    
+    return bRet;
+}
+
+void CFileSend::EnumerateDirectory(CString csDir, LPCTSTR csPrefix, CStringArray &rDirs, CStringArray &rAbsFiles, CStringArray &rRelFiles)
+{
+	CString searchPath = csDir + _T("\\*");
+	HANDLE hFind = ::FindFirstFile(searchPath, &FindData);
+	if(hFind == INVALID_HANDLE_VALUE)
+		return;
+
+	do
+	{
+		if(strcmp(FindData.cFileName, ".") == 0 || strcmp(FindData.cFileName, "..") == 0)
+			continue;
+
+		CString csName = FindData.cFileName;
+		CString csRelPath = csPrefix;
+		if(csRelPath.GetLength() > 0)
+			csRelPath += _T("\\");
+		csRelPath += csName;
+
+		CString csFullPath = csDir + _T("\\") + csName;
+
+		if(FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+            rDirs.Add(csRelPath);
+            EnumerateDirectory(csFullPath, csRelPath, rDirs, rAbsFiles, rRelFiles);
+		}
+		else
+		{
+            rAbsFiles.Add(csFullPath);
+            rRelFiles.Add(csRelPath);
+		}
+	} while(::FindNextFile(hFind, &FindData));
+
+	::FindClose(hFind);
+}
+
+BOOL CFileSend::SendDir(CString csRelPath)
+{
+	CSendInfo Info;
+	CStringA dest = CTextConvert::UnicodeToUTF8(csRelPath);
+	strncpy(Info.m_cDesc, dest, sizeof(Info.m_cDesc));
+	Info.m_cDesc[sizeof(Info.m_cDesc)-1] = 0;
+
+    if(m_Send.SendCSendData(Info, MyEnums::DATA_DIR))
+	{
+		LogSendRecieveInfo(StrF(_T("Sending DATA_DIR for: %s"), csRelPath));
+		return TRUE;
 	}
-	
-	if(m_Send.SendCSendData(Info, MyEnums::END))
-			bRet = TRUE;
-	
-	return bRet;
+	return FALSE;
 }
 
 CClipFormat* CFileSend::GetCF_HDROP_Data(CClipList *pClipList)
@@ -106,7 +184,7 @@ CClipFormat* CFileSend::GetCF_HDROP_Data(CClipList *pClipList)
 	return NULL;
 }
  
-BOOL CFileSend::SendFile(CString csFile)
+BOOL CFileSend::SendFile(CString csFile, LPCTSTR csRelPath)
 {
 	CFile file;
 	BOOL bRet = FALSE;
@@ -124,7 +202,8 @@ BOOL CFileSend::SendFile(CString csFile)
 		CFileException ex;
 		if(file.Open(csFile, CFile::modeRead|CFile::typeBinary|CFile::shareDenyNone, &ex))
 		{
-			CStringA dest = CTextConvert::UnicodeToUTF8(csFile);
+            CString csSendPath = csRelPath ? csRelPath : csFile;
+			CStringA dest = CTextConvert::UnicodeToUTF8(csSendPath);
 			strncpy(Info.m_cDesc, dest, sizeof(Info.m_cDesc));
 			Info.m_cDesc[sizeof(Info.m_cDesc)-1] = 0;			
 
@@ -178,7 +257,7 @@ BOOL CFileSend::SendFile(CString csFile)
 					CStringA csMd5 = md5.MD5FinalToString();
 					strncpy(Info.m_md5, csMd5, sizeof(Info.m_md5));
 
-					LogSendRecieveInfo(StrF(_T("Sending data_end for file: %s, md5: %s"), csFile, CTextConvert::AnsiToUnicode(csMd5)));
+                    LogSendRecieveInfo(StrF(_T("Sending data_end for file: %s, md5: %s"), csSendPath, CTextConvert::AnsiToUnicode(csMd5)));
 
 					if(m_Send.SendCSendData(Info, MyEnums::DATA_END))
 						bRet = TRUE;
