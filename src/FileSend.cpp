@@ -55,11 +55,14 @@ BOOL CFileSend::SendClientFiles(SOCKET sock, CClipList *pClipList)
 		int nNumItems = DragQueryFile(drop, -1, NULL, 0);
 		TCHAR file[MAX_PATH];
 
+		LogSendRecieveInfo(StrF(_T("SendClientFiles: HDROP has %d items"), nNumItems));
 		for(int nItem = 0; nItem < nNumItems; nItem++)
 		{
 			if(DragQueryFile(drop, nItem, file, sizeof(file)) > 0)
 			{
-				if(PathIsDirectory(file))
+				BOOL bDir = PathIsDirectory(file);
+                LogSendRecieveInfo(StrF(_T("SendClientFiles: item[%d] %s [%s]"), nItem, bDir ? _T("DIR") : _T("FILE"), file));
+				if(bDir)
 				{
 					CString csRootName = nsPath::CPath(file).GetName();
 					CopyDirs.Add(csRootName);
