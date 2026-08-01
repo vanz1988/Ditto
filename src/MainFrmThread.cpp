@@ -223,16 +223,14 @@ void CMainFrmThread::OnSaveRemoteClips()
 		// immediately, downloading to ReceivedFiles before user chooses where to paste.
 		// Keep them only in the DB; user will trigger the paste via hotkey.
 		bool bHasRemoteHDROP = FALSE;
-		POSITION pos = pLastClip->m_Formats.GetHeadPosition();
-		while(pos)
-		{
-            CClipFormat* pFmt = pLastClip->m_Formats.GetNext(pos);
-            if(pFmt->m_cfType == theApp.m_RemoteCF_HDROP)
+		for(int i = 0; i < (int)pLastClip->m_Formats.GetSize(); i++)
+        {
+            if(pLastClip->m_Formats.ElementAt(i).m_cfType == theApp.m_RemoteCF_HDROP)
             {
                 bHasRemoteHDROP = TRUE;
                 break;
             }
-		}
+        }
 
         if(!bHasRemoteHDROP)
         {
