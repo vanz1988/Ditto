@@ -13,6 +13,8 @@
 #include <vector>
 #include <shlobj.h>
 #include <shlwapi.h>
+#include <shlguid.h>
+#include <shobjidl.h>
 
 CString GetIPAddress()
 {
@@ -259,31 +261,16 @@ CString GetWndText(HWND hWnd)
 	return cWindowText;
 }
 
-// Manual IShellWindows interface (shdocvw.h not available in CI SDK)
-static const GUID GUID_CLSID_ShellWindows = {0x9BA05972, 0xF6A8, 0x11CF, {0xA4, 0x42, 0x00, 0xA0, 0xC9, 0x0A, 0x8F, 0x39}};
-static const GUID GUID_IID_IShellWindows = {0x85CB6900, 0x4D95, 0x11CF, {0x96, 0x0C, 0x00, 0xAA, 0x00, 0x57, 0x7D, 0xA0}};
-static const GUID GUID_IID_IServiceProvider = {0x6D5140C1, 0x7436, 0x11CE, {0x80, 0x34, 0x00, 0xAA, 0x00, 0x60, 0x09, 0xFA}};
-static const GUID GUID_IID_IShellBrowser = {0x000214E2, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
-static const GUID GUID_IID_IShellView = {0x000214E3, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
-static const GUID GUID_SID_STopLevelBrowser = {0x4C96BE40, 0x915C, 0x11CF, {0x89, 0xDF, 0x00, 0xAA, 0x00, 0x40, 0xAE, 0x0F}};
-
-class IShellWindows : public IDispatch
-{
-public:
-    virtual HRESULT STDMETHODCALLTYPE get_Count(long *pCount) = 0;
-    virtual HRESULT STDMETHODCALLTYPE Item(VARIANT varIndex, LPDISPATCH *ppDisp) = 0;
-};
-
 BOOL GetTargetDirFromExplorer(CString &csDir)
 {
 	csDir.Empty();
-	HRESULT hr;
 
 	IShellWindows *pSW = NULL;
-	hr = CoCreateInstance(GUID_CLSID_ShellWindows, NULL, CLSCTX_ALL, GUID_IID_IShellWindows, (void**)&pSW);
+	HRESULT hr = CoCreateInstance(CLSID_ShellWindows, NULL, CLSCTX_ALL,
+		IID_IShellWindows, (void**)&pSW);
 	if(FAILED(hr) || pSW == NULL)
 	{
-		Log(StrF(_T("GetTargetDir: CoCreateInstance IShellWindows failed hr=0x%08X"), hr));
+		Log(StrF(_T("GetTargetDir: CoCreateInstance failed hr=0x%08X"), hr));
 		return FALSE;
 	}
 
@@ -311,19 +298,19 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 			continue;
 
 		IServiceProvider *pSP = NULL;
-		hr = pDisp->QueryInterface(GUID_IID_IServiceProvider, (void**)&pSP);
+		hr = pDisp->QueryInterface(IID_IServiceProvider, (void**)&pSP);
 		pDisp->Release();
 		if(FAILED(hr) || pSP == NULL)
 			continue;
 
 		IShellBrowser *pSB = NULL;
-		hr = pSP->QueryService(GUID_SID_STopLevelBrowser, GUID_IID_IShellBrowser, (void**)&pSB);
+		hr = pSP->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&pSB);
 		pSP->Release();
 		if(FAILED(hr) || pSB == NULL)
 			continue;
 
 		IShellView *pSV = NULL;
-		hr = pSB->GetViewWindow(&pSV);
+		hr = pSB->QueryActiveShellView(&pSV);
 		pSB->Release();
 		if(FAILED(hr) || pSV == NULL)
 			continue;
@@ -356,7 +343,6 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 		}
 
 		Log(StrF(_T("GetTargetDir: shell path=%s"), csPath));
-
 		DWORD attrs = GetFileAttributes(csPath);
 		if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
 		{
