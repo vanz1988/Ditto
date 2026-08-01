@@ -264,9 +264,10 @@ CString GetWndText(HWND hWnd)
 BOOL GetTargetDirFromExplorer(CString &csDir)
 {
 	csDir.Empty();
+	HRESULT hr;
 
 	IShellWindows *pSW = NULL;
-	HRESULT hr = CoCreateInstance(CLSID_ShellWindows, NULL, CLSCTX_ALL,
+	hr = CoCreateInstance(CLSID_ShellWindows, NULL, CLSCTX_ALL,
 		IID_IShellWindows, (void**)&pSW);
 	if(FAILED(hr) || pSW == NULL)
 	{
@@ -274,116 +275,101 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 		return FALSE;
 	}
 
-	long nCount = 0;
-	hr = pSW->get_Count(&nCount);
-	if(FAILED(hr))
+	// FindWindowSW: directly locate the Explorer window the user is currently interacting with
+	VARIANT vLoc, vEmpty;
+	VariantInit(&vLoc);
+	VariantInit(&vEmpty);
+	vLoc.vt = VT_I4;
+	vLoc.lVal = CSIDL_DESKTOP;
+
+	long hwnd = 0;
+	IDispatch *pDisp = NULL;
+	hr = pSW->FindWindowSW(&vLoc, &vEmpty, SWC_DESKTOP, &hwnd, SWFO_NEEDDISPATCH, &pDisp);
+	pSW->Release();
+	if(FAILED(hr) || pDisp == NULL)
 	{
-		Log(StrF(_T("GetTargetDir: get_Count failed hr=0x%08X"), hr));
-		pSW->Release();
+		Log(StrF(_T("GetTargetDir: FindWindowSW failed hr=0x%08X"), hr));
 		return FALSE;
 	}
-	Log(StrF(_T("GetTargetDir: IShellWindows count=%d"), nCount));
 
-	for(long i = 0; i < nCount; i++)
+	// COM chain: IServiceProvider -> IShellBrowser -> IShellView -> IFolderView -> IPersistFolder2 -> PIDL -> path
+	IServiceProvider *pSP = NULL;
+	hr = pDisp->QueryInterface(IID_IServiceProvider, (void**)&pSP);
+	pDisp->Release();
+	if(FAILED(hr) || pSP == NULL)
 	{
-		VARIANT varIndex;
-		VariantInit(&varIndex);
-		V_I4(&varIndex) = i;
-		V_VT(&varIndex) = VT_I4;
+		Log(StrF(_T("GetTargetDir: QI IServiceProvider failed hr=0x%08X"), hr));
+		return FALSE;
+	}
 
-		IDispatch *pDisp = NULL;
-		hr = pSW->Item(varIndex, &pDisp);
-		VariantClear(&varIndex);
-		if(hr != S_OK || pDisp == NULL)
-			continue;
+	IShellBrowser *pSB = NULL;
+	hr = pSP->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&pSB);
+	pSP->Release();
+	if(FAILED(hr) || pSB == NULL)
+	{
+		Log(StrF(_T("GetTargetDir: QueryService failed hr=0x%08X"), hr));
+		return FALSE;
+	}
 
-		IServiceProvider *pSP = NULL;
-		hr = pDisp->QueryInterface(IID_IServiceProvider, (void**)&pSP);
-		pDisp->Release();
-		if(FAILED(hr) || pSP == NULL)
-			continue;
+	IShellView *pSV = NULL;
+	hr = pSB->QueryActiveShellView(&pSV);
+	pSB->Release();
+	if(FAILED(hr) || pSV == NULL)
+	{
+		Log(StrF(_T("GetTargetDir: QueryActiveShellView failed hr=0x%08X"), hr));
+		return FALSE;
+	}
 
-		IShellBrowser *pSB = NULL;
-		hr = pSP->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&pSB);
-		pSP->Release();
-		if(FAILED(hr) || pSB == NULL)
-			continue;
+	IFolderView *pFV = NULL;
+	hr = pSV->QueryInterface(IID_IFolderView, (void**)&pFV);
+	pSV->Release();
+	if(FAILED(hr) || pFV == NULL)
+	{
+		Log(StrF(_T("GetTargetDir: QI IFolderView failed hr=0x%08X"), hr));
+		return FALSE;
+	}
 
-		// Match against foreground window (the Explorer user is actually using)
-		HWND hFG = ::GetForegroundWindow();
-		if(hFG == NULL)
+	IPersistFolder2 *pPF2 = NULL;
+	hr = pFV->GetFolder(IID_IPersistFolder2, (void**)&pPF2);
+	pFV->Release();
+	if(FAILED(hr) || pPF2 == NULL)
+	{
+		Log(StrF(_T("GetTargetDir: IFolderView::GetFolder failed hr=0x%08X"), hr));
+		return FALSE;
+	}
+
+	LPITEMIDLIST pidlFolder = NULL;
+	hr = pPF2->GetCurFolder(&pidlFolder);
+	pPF2->Release();
+	if(FAILED(hr) || pidlFolder == NULL)
+	{
+		Log(StrF(_T("GetTargetDir: GetCurFolder failed hr=0x%08X"), hr));
+		return FALSE;
+	}
+
+	TCHAR szPath[MAX_PATH];
+	szPath[0] = _T('\0');
+	if(SHGetPathFromIDList(pidlFolder, szPath))
+	{
+		CString csPath(szPath);
+		DWORD attrs = GetFileAttributes(csPath);
+		if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
 		{
-			pSB->Release();
-			continue;
-		}
-
-		HWND hBrowserWnd = NULL;
-		hr = pSB->GetWindow(&hBrowserWnd);
-		if(FAILED(hr) || hBrowserWnd == NULL)
-		{
-			pSB->Release();
-			continue;
-		}
-
-		if(hBrowserWnd != hFG)
-		{
-			TCHAR szFGClass[256];
-			GetClassName(hFG, szFGClass, _countof(szFGClass));
-			Log(StrF(_T("GetTargetDir: browser hwnd=%p fg hwnd=%p class=%s skip"), hBrowserWnd, hFG, szFGClass));
-			pSB->Release();
-			continue;
-		}
-
-		IShellView *pSV = NULL;
-		hr = pSB->QueryActiveShellView(&pSV);
-		pSB->Release();
-		if(FAILED(hr) || pSV == NULL)
-			continue;
-
-		// IShellView -> QI IFolderView -> GetFolder(IPersistFolder2) -> GetCurFolder -> PIDL -> SHGetPathFromIDList
-		IFolderView *pFV = NULL;
-		hr = pSV->QueryInterface(IID_IFolderView, (void**)&pFV);
-		pSV->Release();
-		if(FAILED(hr) || pFV == NULL)
-			continue;
-
-		IPersistFolder2 *pPF2 = NULL;
-		hr = pFV->GetFolder(IID_IPersistFolder2, (void**)&pPF2);
-		pFV->Release();
-		if(FAILED(hr) || pPF2 == NULL)
-			continue;
-
-		LPITEMIDLIST pidlFolder = NULL;
-		hr = pPF2->GetCurFolder(&pidlFolder);
-		pPF2->Release();
-		if(FAILED(hr) || pidlFolder == NULL)
-			continue;
-
-		TCHAR szPath[MAX_PATH];
-		szPath[0] = _T('\0');
-		if(SHGetPathFromIDList(pidlFolder, szPath))
-		{
-			CString csPath(szPath);
-			DWORD attrs = GetFileAttributes(csPath);
-			if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
-			{
-				csDir = csPath;
-				Log(StrF(_T("GetTargetDir: SUCCESS dir=%s"), csDir));
-				CoTaskMemFree(pidlFolder);
-				pSW->Release();
-				return TRUE;
-			}
-			Log(StrF(_T("GetTargetDir: SHGetPath returned but not a dir: %s attrs=%08X"), szPath, attrs));
+			csDir = csPath;
+			Log(StrF(_T("GetTargetDir: SUCCESS dir=%s"), csDir));
 		}
 		else
 		{
-			Log(StrF(_T("GetTargetDir: SHGetPathFromIDList returned FALSE for PIDL")));
+			Log(StrF(_T("GetTargetDir: not a dir: %s attrs=%08X"), szPath, attrs));
 		}
-		CoTaskMemFree(pidlFolder);
 	}
+	else
+	{
+		Log(StrF(_T("GetTargetDir: SHGetPathFromIDList returned FALSE for PIDL")));
+	}
+	CoTaskMemFree(pidlFolder);
 
-	pSW->Release();
-	return FALSE;
+	return csDir.GetLength() > 0 ? TRUE : FALSE;
 }
 CString TopLevelWindowText(DWORD pid)
 {
