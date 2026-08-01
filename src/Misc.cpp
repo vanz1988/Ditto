@@ -294,7 +294,7 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 		IDispatch *pDisp = NULL;
 		hr = pSW->Item(varIndex, &pDisp);
 		VariantClear(&varIndex);
-		if(FAILED(hr) || pDisp == NULL)
+		if(hr != S_OK || pDisp == NULL)
 			continue;
 
 		IServiceProvider *pSP = NULL;
@@ -315,42 +315,46 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 		if(FAILED(hr) || pSV == NULL)
 			continue;
 
-		IShellFolder *pSF = NULL;
-		hr = pSV->GetFolder(&pSF);
+		// IShellView -> QI IFolderView -> GetFolder(IPersistFolder2) -> GetCurFolder -> PIDL -> SHGetPathFromIDList
+		IFolderView *pFV = NULL;
+		hr = pSV->QueryInterface(IID_IFolderView, (void**)&pFV);
 		pSV->Release();
-		if(FAILED(hr) || pSF == NULL)
+		if(FAILED(hr) || pFV == NULL)
 			continue;
 
-		STRRET strRet;
-		hr = pSF->GetDisplayNameOf(NULL, SHGDN_FORPARSING, &strRet);
-		pSF->Release();
-		if(FAILED(hr))
+		IPersistFolder2 *pPF2 = NULL;
+		hr = pFV->GetFolder(IID_IPersistFolder2, (void**)&pPF2);
+		pFV->Release();
+		if(FAILED(hr) || pPF2 == NULL)
 			continue;
 
-		CString csPath;
-		switch (strRet.uType)
+		LPITEMIDLIST pidlFolder = NULL;
+		hr = pPF2->GetCurFolder(&pidlFolder);
+		pPF2->Release();
+		if(FAILED(hr) || pidlFolder == NULL)
+			continue;
+
+		TCHAR szPath[MAX_PATH];
+		szPath[0] = _T('\0');
+		if(SHGetPathFromIDList(pidlFolder, szPath))
 		{
-		case STRRET_WSTR:
-			csPath = strRet.pOleStr;
-			CoTaskMemFree(strRet.pOleStr);
-			break;
-		case STRRET_CSTR:
-			csPath = strRet.cStr;
-			break;
-		case STRRET_OFFSET:
-		default:
-			continue;
+			CString csPath(szPath);
+			DWORD attrs = GetFileAttributes(csPath);
+			if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
+			{
+				csDir = csPath;
+				Log(StrF(_T("GetTargetDir: SUCCESS dir=%s"), csDir));
+				CoTaskMemFree(pidlFolder);
+				pSW->Release();
+				return TRUE;
+			}
+			Log(StrF(_T("GetTargetDir: SHGetPath returned but not a dir: %s attrs=%08X"), szPath, attrs));
 		}
-
-		Log(StrF(_T("GetTargetDir: shell path=%s"), csPath));
-		DWORD attrs = GetFileAttributes(csPath);
-		if(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
+		else
 		{
-			csDir = csPath;
-			Log(StrF(_T("GetTargetDir: SUCCESS dir=%s"), csDir));
-			pSW->Release();
-			return TRUE;
+			Log(StrF(_T("GetTargetDir: SHGetPathFromIDList failed hr=0x%08X"), hr));
 		}
+		CoTaskMemFree(pidlFolder);
 	}
 
 	pSW->Release();
