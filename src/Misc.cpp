@@ -318,8 +318,6 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 			continue;
 
 		// GetWindow returns the Explorer's internal sub-window (e.g. 0x60A06)
-		// which is a CHILD of the top-level CabinetWClass foreground window (e.g. 0x60DF8).
-		// Use IsChild to match instead of == (which would never be equal).
 		HWND hBrowserWnd = NULL;
 		hr = pSB->GetWindow(&hBrowserWnd);
 		if(FAILED(hr) || hBrowserWnd == NULL)
@@ -328,9 +326,48 @@ BOOL GetTargetDirFromExplorer(CString &csDir)
 			continue;
 		}
 
-		if(!::IsChild(hBrowserWnd, hFG))
+		// Extract path for every window (debug)
+		TCHAR szWinPath[MAX_PATH];
+		szWinPath[0] = _T('\0');
 		{
-			Log(StrF(_T("GetTargetDir: browser hwnd=%p not child of fg hwnd=%p skip"), hBrowserWnd, hFG));
+			IShellView *pSV_Tmp = NULL;
+			hr = pSB->QueryActiveShellView(&pSV_Tmp);
+			if(SUCCEEDED(hr) && pSV_Tmp != NULL)
+			{
+				IFolderView *pFV_Tmp = NULL;
+				hr = pSV_Tmp->QueryInterface(IID_IFolderView, (void**)&pFV_Tmp);
+				pSV_Tmp->Release();
+				if(SUCCEEDED(hr) && pFV_Tmp != NULL)
+				{
+					IPersistFolder2 *pPF2_Tmp = NULL;
+					hr = pFV_Tmp->GetFolder(IID_IPersistFolder2, (void**)&pPF2_Tmp);
+					pFV_Tmp->Release();
+					if(SUCCEEDED(hr) && pPF2_Tmp != NULL)
+					{
+						LPITEMIDLIST pidlTmp = NULL;
+						hr = pPF2_Tmp->GetCurFolder(&pidlTmp);
+						pPF2_Tmp->Release();
+						if(SUCCEEDED(hr) && pidlTmp != NULL)
+						{
+							if(SHGetPathFromIDList(pidlTmp, szWinPath) == FALSE)
+								szWinPath[0] = _T('\0');
+							CoTaskMemFree(pidlTmp);
+						}
+					}
+				}
+			}
+		}
+
+		HWND hRootBrowser = ::GetAncestor(hBrowserWnd, GA_ROOT);
+		HWND hRootFG = ::GetAncestor(hFG, GA_ROOT);
+		DWORD pidFG = 0, pidBrowser = 0;
+		::GetWindowThreadProcessId(hFG, &pidFG);
+		::GetWindowThreadProcessId(hBrowserWnd, &pidBrowser);
+		Log(StrF(_T("GetTargetDir: [i=%d] browser=%p root=%p pid=%d fg=%p root=%p pid=%d path=%s"),
+			i, hBrowserWnd, hRootBrowser, pidBrowser, hFG, hRootFG, pidFG, szWinPath));
+
+		if(hRootBrowser != hRootFG)
+		{
 			pSB->Release();
 			continue;
 		}
